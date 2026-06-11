@@ -3,13 +3,6 @@ use chromiumoxide::browser::Browser;
 use futures::StreamExt;
 use tokio::time::{timeout, Duration};
 
-fn extract_attr_value(tag: &str, attr: &str) -> Option<String> {
-    let pat = format!("{attr}=\"", attr = attr);
-    let start = tag.find(&pat)? + pat.len();
-    let end = tag[start..].find('"')?;
-    Some(tag[start..start + end].to_string())
-}
-
 fn sanitize_filename_component(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -22,31 +15,84 @@ fn sanitize_filename_component(s: &str) -> String {
     out.trim_matches('_').to_string()
 }
 
-fn extract_course_and_full_result_urls(html: &str) -> Vec<(String, String)> {
+fn strip_tags_and_collapse_ws(s: &str) -> String {
+    let mut out = String::new();
+    let mut in_tag = false;
+    let mut prev_ws = false;
+
+    for ch in s.chars() {
+        match ch {
+            '<' => {
+                in_tag = true;
+            }
+            '>' => {
+                in_tag = false;
+            }
+            _ if in_tag => {}
+            _ if ch.is_whitespace() => {
+                if !prev_ws {
+                    out.push(' ');
+                    prev_ws = true;
+                }
+            }
+            _ => {
+                out.push(ch);
+                prev_ws = false;
+            }
+        }
+    }
+
+    out.trim().to_string()
+}
+
+fn remove_svg_blocks(s: &str) -> String {
+    let mut out = String::new();
+    let mut i = 0;
+    while let Some(rel) = s[i..].find("<svg") {
+        let svg_start = i + rel;
+        out.push_str(&s[i..svg_start]);
+
+        if let Some(end_rel) = s[svg_start..].find("</svg>") {
+            i = svg_start + end_rel + "</svg>".len();
+        } else {
+            // no closing tag; drop remainder
+            return out;
+        }
+    }
+    out.push_str(&s[i..]);
+    out
+}
+
+fn extract_time_order_course_and_full_result_urls(html: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::<String>::new();
-    let needle = "<span>Full result</span>";
+    let needle = "data-test-selector=\"button-fullResult\"";
 
     let mut start = 0;
     while let Some(rel) = html[start..].find(needle) {
         let idx = start + rel;
 
-        let course_name = if let Some(section_pos) = html[..idx].rfind("<section") {
-            if let Some(tag_end_rel) = html[section_pos..].find('>') {
-                let tag = &html[section_pos..section_pos + tag_end_rel + 1];
-                extract_attr_value(tag, "data-diffusion-coursename")
-                    .unwrap_or_else(|| "unknown".to_string())
-            } else {
-                "unknown".to_string()
-            }
-        } else {
-            // fallback: find any data-diffusion-coursename occurrence nearby
-            let window_start = idx.saturating_sub(5000);
+        // Time-order page has a course name link block like:
+        // <a ... data-test-selector="text-raceNameTimeView">Southwell ...</a>
+        let course_name = {
+            let window_start = idx.saturating_sub(20000);
             let window = &html[window_start..idx];
-            if let Some(attr_pos) = window.rfind("data-diffusion-coursename=\"") {
-                let value_start = attr_pos + "data-diffusion-coursename=\"".len();
-                if let Some(value_end) = window[value_start..].find('"') {
-                    window[value_start..value_start + value_end].to_string()
+            if let Some(anchor_pos) = window.rfind("data-test-selector=\"text-raceNameTimeView\"") {
+                let after_anchor = &window[anchor_pos..];
+                if let Some(gt_rel) = after_anchor.find('>') {
+                    let inner_start = anchor_pos + gt_rel + 1;
+                    if let Some(a_end_rel) = window[inner_start..].find("</a>") {
+                        let inner = &window[inner_start..inner_start + a_end_rel];
+                        let inner_without_svg = remove_svg_blocks(inner);
+                        let name = strip_tags_and_collapse_ws(&inner_without_svg);
+                        if name.is_empty() {
+                            "unknown".to_string()
+                        } else {
+                            name
+                        }
+                    } else {
+                        "unknown".to_string()
+                    }
                 } else {
                     "unknown".to_string()
                 }
@@ -55,11 +101,14 @@ fn extract_course_and_full_result_urls(html: &str) -> Vec<(String, String)> {
             }
         };
 
+        // Look back from the button marker to the opening <a ... href="..."> in the same tag.
         if let Some(a_pos) = html[..idx].rfind("<a") {
-            if let Some(href_pos_rel) = html[a_pos..idx].find("href=\"") {
-                let href_start = a_pos + href_pos_rel + "href=\"".len();
-                if let Some(href_end_rel) = html[href_start..].find('"') {
-                    let href = &html[href_start..href_start + href_end_rel];
+            let tag_end = html[a_pos..].find('>').map(|r| a_pos + r).unwrap_or(idx);
+            let tag = &html[a_pos..tag_end.min(idx)];
+            if let Some(href_pos_rel) = tag.find("href=\"") {
+                let href_start = href_pos_rel + "href=\"".len();
+                if let Some(href_end_rel) = tag[href_start..].find('"') {
+                    let href = &tag[href_start..href_start + href_end_rel];
                     if !href.is_empty() {
                         let url = if href.starts_with("http://") || href.starts_with("https://") {
                             href.to_string()
@@ -95,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
         .or_else(|| std::env::var("RESULTS_DATE").ok())
         .unwrap_or_else(|| "2026-06-07".to_string());
     let target_url = format!(
-        "https://www.racingpost.com/results/{date}",
+        "https://www.racingpost.com/results/{date}/time-order",
         date = results_date
     );
     eprintln!("scraper: target_url={target_url}");
@@ -139,30 +188,51 @@ async fn main() -> anyhow::Result<()> {
     std::fs::write(&out_path, &html).with_context(|| format!("write {out_path}"))?;
     eprintln!("scraper: html saved");
 
-    eprintln!("scraper: extracting full result urls (grouped by course)");
-    let course_urls = extract_course_and_full_result_urls(&html);
+    eprintln!("scraper: extracting full result urls (time-order)");
+    let course_urls = extract_time_order_course_and_full_result_urls(&html);
     let mut grouped = std::collections::BTreeMap::<String, Vec<String>>::new();
     for (course, url) in course_urls {
+        let has_country = course.contains('(') && course.contains(')');
+        let is_ire = course.contains("(IRE)");
+        if has_country && !is_ire {
+            continue;
+        }
+
         grouped.entry(course).or_default().push(url);
     }
 
-    eprintln!("scraper: writing {} course files", grouped.len());
+    let mut lines = Vec::new();
+    for (course, urls) in &grouped {
+        for url in urls {
+            lines.push(format!("{course}\t{url}"));
+        }
+    }
+
+    let urls_out_path = format!(
+        "/data/racingpost-results-{date}-time-order-full-result-urls.tsv",
+        date = results_date
+    );
+    eprintln!(
+        "scraper: writing {} links ({} courses) to {}",
+        lines.len(),
+        grouped.len(),
+        urls_out_path
+    );
+    std::fs::write(&urls_out_path, lines.join("\n"))
+        .with_context(|| format!("write {urls_out_path}"))?;
+
+    eprintln!("scraper: also writing one file per course");
     for (course, urls) in grouped {
         let course_slug = sanitize_filename_component(&course);
-        let urls_out_path = format!(
-            "/data/racingpost-results-{date}-full-result-urls-{course}.txt",
+        let per_course_out = format!(
+            "/data/racingpost-results-{date}-time-order-full-result-urls-{course}.txt",
             date = results_date,
             course = if course_slug.is_empty() { "unknown" } else { &course_slug }
         );
-        eprintln!(
-            "scraper: writing {} urls for course={} to {}",
-            urls.len(),
-            course,
-            urls_out_path
-        );
-        std::fs::write(&urls_out_path, urls.join("\n"))
-            .with_context(|| format!("write {urls_out_path}"))?;
+        std::fs::write(&per_course_out, urls.join("\n"))
+            .with_context(|| format!("write {per_course_out}"))?;
     }
+
     eprintln!("scraper: urls saved");
 
     eprintln!("scraper: closing browser");
