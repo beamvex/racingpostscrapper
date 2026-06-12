@@ -44,33 +44,19 @@ jobs:
           set -euo pipefail
           aws ecr get-login-password --region eu-west-2 | docker login --username AWS --password-stdin 512752756525.dkr.ecr.eu-west-2.amazonaws.com
 
-      - name: Pull latest image for build cache (if exists)
-        env:
-          ECR_REPOSITORY: racingpost-scrapper
-        run: |
-          set -euo pipefail
-          docker pull 512752756525.dkr.ecr.eu-west-2.amazonaws.com/$ECR_REPOSITORY:latest || true
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build Docker image
-        env:
-          ECR_REPOSITORY: racingpost-scrapper
-        run: |
-          set -euo pipefail
-          IMAGE=512752756525.dkr.ecr.eu-west-2.amazonaws.com/$ECR_REPOSITORY
-          docker build \
-            --cache-from $IMAGE:latest \
-            -t $IMAGE:${{ github.sha }} \
-            -t $IMAGE:latest \
-            .
-
-      - name: Push Docker image
-        env:
-          ECR_REPOSITORY: racingpost-scrapper
-        run: |
-          set -euo pipefail
-          IMAGE=512752756525.dkr.ecr.eu-west-2.amazonaws.com/$ECR_REPOSITORY
-          docker push $IMAGE:${{ github.sha }}
-          docker push $IMAGE:latest
+      - name: Build and push (with cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            512752756525.dkr.ecr.eu-west-2.amazonaws.com/racingpost-scrapper:${{ github.sha }}
+            512752756525.dkr.ecr.eu-west-2.amazonaws.com/racingpost-scrapper:latest
+          cache-from: type=registry,ref=512752756525.dkr.ecr.eu-west-2.amazonaws.com/racingpost-scrapper:buildcache
+          cache-to: type=registry,ref=512752756525.dkr.ecr.eu-west-2.amazonaws.com/racingpost-scrapper:buildcache,mode=max
 
   terraform:
     runs-on: ubuntu-latest
