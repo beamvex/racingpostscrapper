@@ -16,8 +16,67 @@ permissions:
   contents: read
 
 jobs:
+  docker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: eu-west-2
+
+      - name: Ensure ECR repository exists
+        env:
+          ECR_REPOSITORY: racingpost-scrapper
+        run: |
+          set -euo pipefail
+          if aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" >/dev/null 2>&1; then
+            echo "ECR repository exists: $ECR_REPOSITORY"
+          else
+            echo "Creating ECR repository: $ECR_REPOSITORY"
+            aws ecr create-repository --repository-name "$ECR_REPOSITORY" >/dev/null
+          fi
+
+      - name: Login to Amazon ECR
+        run: |
+          set -euo pipefail
+          aws ecr get-login-password --region eu-west-2 | docker login --username AWS --password-stdin 512752756525.dkr.ecr.eu-west-2.amazonaws.com
+
+      - name: Pull latest image for build cache (if exists)
+        env:
+          ECR_REPOSITORY: racingpost-scrapper
+        run: |
+          set -euo pipefail
+          docker pull 512752756525.dkr.ecr.eu-west-2.amazonaws.com/$ECR_REPOSITORY:latest || true
+
+      - name: Build Docker image
+        env:
+          ECR_REPOSITORY: racingpost-scrapper
+        run: |
+          set -euo pipefail
+          IMAGE=512752756525.dkr.ecr.eu-west-2.amazonaws.com/$ECR_REPOSITORY
+          docker build \
+            --cache-from $IMAGE:latest \
+            -t $IMAGE:${{ github.sha }} \
+            -t $IMAGE:latest \
+            .
+
+      - name: Push Docker image
+        env:
+          ECR_REPOSITORY: racingpost-scrapper
+        run: |
+          set -euo pipefail
+          IMAGE=512752756525.dkr.ecr.eu-west-2.amazonaws.com/$ECR_REPOSITORY
+          docker push $IMAGE:${{ github.sha }}
+          docker push $IMAGE:latest
+
   terraform:
     runs-on: ubuntu-latest
+    needs: docker
     defaults:
       run:
         working-directory: terraform
