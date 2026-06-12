@@ -51,6 +51,8 @@ else
   /app/target/release/racingpost_scraper
 fi
 
+aws s3 cp /data "s3://${SCRAPER_DATA_BUCKET_NAME}/" --recursive
+
 SCRAPER_EXIT=$?
 
 kill ${CHROMIUM_PID} >/dev/null 2>&1 || true

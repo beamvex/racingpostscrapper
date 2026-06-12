@@ -21,8 +21,8 @@ resource "aws_ecs_task_definition" "scraper" {
 
       environment = [
         {
-          name  = "SCRAPER_DATA_BUCKET_ARN"
-          value = aws_s3_bucket.scraper_data.arn
+          name  = "SCRAPER_DATA_BUCKET_NAME"
+          value = aws_s3_bucket.scraper_data.name
         }
       ]
 
