@@ -149,6 +149,19 @@ async fn main() -> anyhow::Result<()> {
     );
     eprintln!("scraper: target_url={target_url}");
 
+    let (year, month, day) = {
+        let mut it = results_date.split('-');
+        (
+            it.next().unwrap_or("unknown"),
+            it.next().unwrap_or("unknown"),
+            it.next().unwrap_or("unknown"),
+        )
+    };
+    let out_base_dir = format!("/data/{}/{}/{}/", year, month, day);
+    std::fs::create_dir_all(&out_base_dir)
+        .with_context(|| format!("create {out_base_dir}"))?;
+    eprintln!("scraper: out_base_dir={out_base_dir}");
+
     eprintln!("scraper: connecting to chromium at http://127.0.0.1:9222");
     let (mut browser, mut handler) = timeout(
         Duration::from_secs(15),
@@ -177,7 +190,11 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("scraper: page opened, waiting briefly before screenshot");
     tokio::time::sleep(Duration::from_secs(5)).await;
 
-    let out_path = format!("/data/racingpost-results-{date}.html", date = results_date);
+    let out_path = format!(
+        "{base}racingpost-results-{date}.html",
+        base = out_base_dir,
+        date = results_date
+    );
     eprintln!("scraper: fetching html");
     let html = timeout(Duration::from_secs(30), page.content())
         .await
@@ -209,7 +226,8 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let urls_out_path = format!(
-        "/data/racingpost-results-{date}-time-order-full-result-urls.tsv",
+        "{base}racingpost-results-{date}-time-order-full-result-urls.tsv",
+        base = out_base_dir,
         date = results_date
     );
     eprintln!(
@@ -222,10 +240,11 @@ async fn main() -> anyhow::Result<()> {
         .with_context(|| format!("write {urls_out_path}"))?;
 
     eprintln!("scraper: also writing one file per course");
-    for (course, urls) in grouped {
+    for (course, urls) in &grouped {
         let course_slug = sanitize_filename_component(&course);
         let per_course_out = format!(
-            "/data/racingpost-results-{date}-time-order-full-result-urls-{course}.txt",
+            "{base}racingpost-results-{date}-time-order-full-result-urls-{course}.txt",
+            base = out_base_dir,
             date = results_date,
             course = if course_slug.is_empty() { "unknown" } else { &course_slug }
         );
@@ -234,6 +253,48 @@ async fn main() -> anyhow::Result<()> {
     }
 
     eprintln!("scraper: urls saved");
+
+    let full_results_html_dir = format!(
+        "{base}racingpost-results-{date}-time-order-full-results-html",
+        base = out_base_dir,
+        date = results_date
+    );
+    std::fs::create_dir_all(&full_results_html_dir)
+        .with_context(|| format!("create {full_results_html_dir}"))?;
+
+    eprintln!(
+        "scraper: downloading full result pages html into {}",
+        full_results_html_dir
+    );
+    let mut downloaded = 0usize;
+    for (course, urls) in &grouped {
+        let course_slug = sanitize_filename_component(course);
+        let course_part = if course_slug.is_empty() { "unknown" } else { &course_slug };
+        for (i, url) in urls.iter().enumerate() {
+            eprintln!("scraper: fetching full result html {url}");
+            let detail_page = timeout(Duration::from_secs(30), browser.new_page(url))
+                .await
+                .context("timeout opening full result page")?
+                .context("open full result page")?;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+
+            let detail_html = timeout(Duration::from_secs(30), detail_page.content())
+                .await
+                .context("timeout fetching full result html")?
+                .context("fetch full result html")?;
+
+            let html_out_path = format!(
+                "{dir}/{course}-{idx}.html",
+                dir = full_results_html_dir,
+                course = course_part,
+                idx = i + 1
+            );
+            std::fs::write(&html_out_path, detail_html)
+                .with_context(|| format!("write {html_out_path}"))?;
+            downloaded += 1;
+        }
+    }
+    eprintln!("scraper: downloaded {} full result html pages", downloaded);
 
     eprintln!("scraper: closing browser");
     browser.close().await.ok();
