@@ -28,6 +28,19 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
     (year, m, d)
 }
 
+fn pseudo_random_in_range(min_ms: u64, max_ms: u64) -> u64 {
+    if max_ms <= min_ms {
+        return min_ms;
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0));
+    let mixed = now.as_nanos() as u64 ^ now.as_secs();
+    let span = max_ms - min_ms + 1;
+    min_ms + (mixed % span)
+}
+
 fn sanitize_filename_component(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -292,34 +305,69 @@ async fn main() -> anyhow::Result<()> {
         full_results_html_dir
     );
     let mut downloaded = 0usize;
+    let mut failed = 0usize;
     for (course, urls) in &grouped {
         let course_slug = sanitize_filename_component(course);
         let course_part = if course_slug.is_empty() { "unknown" } else { &course_slug };
         for (i, url) in urls.iter().enumerate() {
-            eprintln!("scraper: fetching full result html {url}");
-            let detail_page = timeout(Duration::from_secs(30), browser.new_page(url))
-                .await
-                .context("timeout opening full result page")?
-                .context("open full result page")?;
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            let mut ok = false;
+            for attempt in 1..=3 {
+                eprintln!("scraper: fetching full result html (attempt {attempt}/3) {url}");
 
-            let detail_html = timeout(Duration::from_secs(30), detail_page.content())
-                .await
-                .context("timeout fetching full result html")?
-                .context("fetch full result html")?;
+                let detail_page = match timeout(Duration::from_secs(30), browser.new_page(url)).await {
+                    Ok(Ok(p)) => p,
+                    Ok(Err(e)) => {
+                        eprintln!("scraper: open full result page failed (attempt {attempt}/3) url={url} err={e}");
+                        continue;
+                    }
+                    Err(_) => {
+                        eprintln!("scraper: timeout opening full result page (attempt {attempt}/3) url={url}");
+                        continue;
+                    }
+                };
 
-            let html_out_path = format!(
-                "{dir}/{course}-{idx}.html",
-                dir = full_results_html_dir,
-                course = course_part,
-                idx = i + 1
-            );
-            std::fs::write(&html_out_path, detail_html)
-                .with_context(|| format!("write {html_out_path}"))?;
-            downloaded += 1;
+                let wait_ms = pseudo_random_in_range(1500, 3500);
+                tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+
+                let detail_html = match timeout(Duration::from_secs(30), detail_page.content()).await {
+                    Ok(Ok(h)) => h,
+                    Ok(Err(e)) => {
+                        eprintln!("scraper: fetch full result html failed (attempt {attempt}/3) url={url} err={e}");
+                        continue;
+                    }
+                    Err(_) => {
+                        eprintln!("scraper: timeout fetching full result html (attempt {attempt}/3) url={url}");
+                        continue;
+                    }
+                };
+
+                let html_out_path = format!(
+                    "{dir}/{course}-{idx}.html",
+                    dir = full_results_html_dir,
+                    course = course_part,
+                    idx = i + 1
+                );
+                if let Err(e) = std::fs::write(&html_out_path, detail_html)
+                    .with_context(|| format!("write {html_out_path}"))
+                {
+                    eprintln!("scraper: write html failed url={url} path={html_out_path} err={e}");
+                    break;
+                }
+
+                downloaded += 1;
+                ok = true;
+                break;
+            }
+
+            if !ok {
+                failed += 1;
+            }
         }
     }
-    eprintln!("scraper: downloaded {} full result html pages", downloaded);
+    eprintln!(
+        "scraper: downloaded {} full result html pages (failed {})",
+        downloaded, failed
+    );
 
     eprintln!("scraper: closing browser");
     browser.close().await.ok();

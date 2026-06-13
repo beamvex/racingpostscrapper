@@ -6,6 +6,19 @@ use tokio::time::timeout;
 
 use racingpost_scraper::full_result_parse;
 
+fn pseudo_random_in_range(min_ms: u64, max_ms: u64) -> u64 {
+    if max_ms <= min_ms {
+        return min_ms;
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_else(|_| Duration::from_secs(0));
+    let mixed = now.as_nanos() as u64 ^ now.as_secs();
+    let span = max_ms - min_ms + 1;
+    min_ms + (mixed % span)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let mut input_path: Option<String> = None;
@@ -48,26 +61,51 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let mut full_results_json = Vec::new();
+    let mut failed = 0usize;
     for (course, url) in pairs {
-        eprintln!("parser: fetching {url}");
+        let mut ok = false;
+        for attempt in 1..=3 {
+            eprintln!("parser: fetching (attempt {attempt}/3) {url}");
 
-        let detail_page = timeout(Duration::from_secs(30), browser.new_page(&url))
-            .await
-            .context("timeout opening full result page")?
-            .context("open full result page")?;
+            let detail_page = match timeout(Duration::from_secs(30), browser.new_page(&url)).await {
+                Ok(Ok(p)) => p,
+                Ok(Err(e)) => {
+                    eprintln!("parser: open page failed (attempt {attempt}/3) url={url} err={e}");
+                    continue;
+                }
+                Err(_) => {
+                    eprintln!("parser: timeout opening page (attempt {attempt}/3) url={url}");
+                    continue;
+                }
+            };
 
-        tokio::time::sleep(Duration::from_secs(2)).await;
+            let wait_ms = pseudo_random_in_range(1500, 3500);
+            tokio::time::sleep(Duration::from_millis(wait_ms)).await;
 
-        let detail_html = timeout(Duration::from_secs(30), detail_page.content())
-            .await
-            .context("timeout fetching full result html")?
-            .context("fetch full result html")?;
+            let detail_html = match timeout(Duration::from_secs(30), detail_page.content()).await {
+                Ok(Ok(h)) => h,
+                Ok(Err(e)) => {
+                    eprintln!("parser: fetch html failed (attempt {attempt}/3) url={url} err={e}");
+                    continue;
+                }
+                Err(_) => {
+                    eprintln!("parser: timeout fetching html (attempt {attempt}/3) url={url}");
+                    continue;
+                }
+            };
 
-        full_results_json.push(full_result_parse::parse_full_result_page(
-            &detail_html,
-            &url,
-            &course,
-        ));
+            full_results_json.push(full_result_parse::parse_full_result_page(
+                &detail_html,
+                &url,
+                &course,
+            ));
+            ok = true;
+            break;
+        }
+
+        if !ok {
+            failed += 1;
+        }
     }
 
     let out_filename = std::path::Path::new(&input_path)
@@ -82,9 +120,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| "racingpost-time-order-full-results.json".to_string());
     let json_out_path = format!("{}/{}", out_dir.trim_end_matches('/'), out_filename);
     eprintln!(
-        "parser: writing {} races to {}",
+        "parser: writing {} races to {} (failed {})",
         full_results_json.len(),
-        json_out_path
+        json_out_path,
+        failed
     );
 
     std::fs::write(&json_out_path, format!("[{}]", full_results_json.join(",")))
