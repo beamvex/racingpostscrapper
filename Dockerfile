@@ -26,5 +26,8 @@ COPY ./app /app
 
 RUN cargo build --release
 
+COPY ./scripts/backfill_last_2_years.sh /app/backfill_last_2_years.sh
+RUN chmod +x /app/backfill_last_2_years.sh
+
 ENTRYPOINT ["bash", "./runscript.sh"]
 
