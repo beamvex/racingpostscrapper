@@ -168,6 +168,9 @@ main() {
     echo "backfill: START_DATE=$START_DATE END_DATE=$END_DATE"
   fi
 
+  echo "backfill: terraform init"
+  terraform -chdir="$TERRAFORM_DIR" init -input=false >/dev/null
+
   local failures=0
   while read -r d; do
     echo "backfill: running date=$d"
