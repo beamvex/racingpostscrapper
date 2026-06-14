@@ -43,6 +43,18 @@ data "aws_iam_policy_document" "ecs_task_s3" {
     effect = "Allow"
 
     actions = [
+      "s3:ListBucket"
+    ]
+
+    resources = [
+      "arn:aws:s3:::robterraform"
+    ]
+  }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
       "s3:GetObject",
       "s3:PutObject",
       "s3:DeleteObject"
@@ -50,6 +62,18 @@ data "aws_iam_policy_document" "ecs_task_s3" {
 
     resources = [
       "${aws_s3_bucket.scraper_data.arn}/*"
+    ]
+  }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject"
+    ]
+
+    resources = [
+      "arn:aws:s3:::robterraform/racingpost-scraper/terraform.tfstate"
     ]
   }
 }
