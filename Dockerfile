@@ -26,6 +26,7 @@ WORKDIR /app
 RUN cargo build --release --bin helloworld
 
 COPY ./app /app
+COPY ./terraform /app/terraform
 
 RUN cargo build --release
 
