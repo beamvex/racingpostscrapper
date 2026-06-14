@@ -84,6 +84,56 @@ resource "aws_iam_role_policy" "ecs_task_s3" {
   policy = data.aws_iam_policy_document.ecs_task_s3.json
 }
 
+data "aws_iam_policy_document" "ecs_task_ecs" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "ecs:RunTask"
+    ]
+    resources = [
+      "${aws_ecs_task_definition.scraper.arn_without_revision}:*",
+      "${aws_ecs_task_definition.backfiller.arn_without_revision}:*"
+    ]
+
+    condition {
+      test     = "ArnEquals"
+      variable = "ecs:cluster"
+      values   = [aws_ecs_cluster.main.arn]
+    }
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "ecs:DescribeTasks",
+      "ecs:DescribeTaskDefinition"
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "iam:PassRole"
+    ]
+    resources = [
+      aws_iam_role.ecs_task_execution.arn,
+      aws_iam_role.ecs_task.arn
+    ]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ecs-tasks.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "ecs_task_ecs" {
+  name   = "racingpost-scraper-ecs"
+  role   = aws_iam_role.ecs_task.id
+  policy = data.aws_iam_policy_document.ecs_task_ecs.json
+}
+
 data "aws_iam_policy_document" "eventbridge_assume_role" {
   statement {
     effect = "Allow"
