@@ -8,6 +8,10 @@ pub async fn run_for_date(
     let html =
         crate::scrape::fetch_and_save_time_order_html(&mut browser, target_url, &out_path).await?;
 
+    let marker = "data-test-selector=\"button-fullResult\"";
+    let marker_count = html.matches(marker).count();
+    eprintln!("scraper: time-order marker count={marker_count}");
+
     eprintln!("scraper: extracting full result urls (time-order)");
     let course_urls = crate::racingpost::extract_time_order_course_and_full_result_urls(&html);
     let grouped = crate::racingpost::group_and_filter_course_urls(course_urls);
