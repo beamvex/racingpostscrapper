@@ -5,6 +5,7 @@ pub mod full_results_loop;
 pub mod full_results_write;
 mod paths;
 mod time_order;
+pub mod time_order_scroll;
 mod urls;
 pub mod urls_course;
 pub mod urls_tsv;

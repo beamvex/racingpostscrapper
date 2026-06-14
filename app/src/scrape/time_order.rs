@@ -1,6 +1,5 @@
 use anyhow::Context;
 use chromiumoxide::browser::Browser;
-use chromiumoxide::page::Page;
 use tokio::time::{timeout, Duration};
 
 pub async fn fetch_and_save_time_order_html(
@@ -14,7 +13,7 @@ pub async fn fetch_and_save_time_order_html(
         .context("open page")?;
 
     tokio::time::sleep(Duration::from_secs(5)).await;
-    scroll_until_stable(&page).await?;
+    crate::scrape::time_order_scroll::scroll_until_stable(&page).await?;
 
     let html = timeout(Duration::from_secs(30), page.content())
         .await
@@ -26,28 +25,4 @@ pub async fn fetch_and_save_time_order_html(
     eprintln!("scraper: html saved");
 
     Ok(html)
-}
-
-async fn scroll_until_stable(page: &Page) -> anyhow::Result<()> {
-    let mut prev = 0i64;
-    for _ in 0..8 {
-        let h = page_height(page).await?;
-        if h == prev {
-            return Ok(());
-        }
-        prev = h;
-        page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-            .await
-            .context("scroll")?;
-        tokio::time::sleep(Duration::from_secs(2)).await;
-    }
-    Ok(())
-}
-
-async fn page_height(page: &Page) -> anyhow::Result<i64> {
-    let v = page
-        .evaluate("document.body && document.body.scrollHeight ? document.body.scrollHeight : 0")
-        .await
-        .context("evaluate height")?;
-    Ok(v.value().unwrap_or_default().as_i64().unwrap_or(0))
 }
