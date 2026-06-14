@@ -24,7 +24,7 @@ pub async fn fetch_detail_html(
     let wait_ms = crate::utils::pseudo_random_in_range(1500, 3500);
     tokio::time::sleep(Duration::from_millis(wait_ms)).await;
 
-    match timeout(Duration::from_secs(30), page.content()).await {
+    let out = match timeout(Duration::from_secs(30), page.content()).await {
         Ok(Ok(h)) => Some(h),
         Ok(Err(e)) => {
             *seq += 1;
@@ -36,5 +36,8 @@ pub async fn fetch_detail_html(
             eprintln!("scraper: seq={seq} timeout fetching full result html (attempt {attempt}/3) url={url}", seq = *seq);
             None
         }
-    }
+    };
+
+    page.close().await.ok();
+    out
 }

@@ -9,4 +9,4 @@ docker run --rm -it -p 3001:3001 \
   -e AWS_REGION=eu-west-2 \
   -v ~/.aws:/config/.aws \
   -v ./data:/data \
-  racingpost-scrapper:latest 2026-04-01
+  racingpost-scrapper:latest 2024-06-14
