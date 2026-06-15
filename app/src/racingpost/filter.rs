@@ -14,5 +14,6 @@ pub fn group_and_filter_course_urls(
 fn is_foreign_country_course(course: &str) -> bool {
     let has_country = course.contains('(') && course.contains(')');
     let is_ire = course.contains("(IRE)");
-    has_country && !is_ire
+    let is_aw = course.contains("(AW)");
+    has_country && !is_ire && !is_aw
 }
