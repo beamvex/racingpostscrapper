@@ -48,10 +48,10 @@ for month in ${months}; do
     --network-configuration "awsvpcConfiguration={subnets=[${ECS_SUBNETS_CSV}],securityGroups=[${ECS_SECURITY_GROUP_ID}],assignPublicIp=${ASSIGN_PUBLIC_IP}}" \
     --overrides "$(cat <<JSON
 {
-  \"containerOverrides\": [
+  "containerOverrides": [
     {
-      \"name\": \"processor\",
-      \"command\": [\"${month}\"]
+      "name": "processor",
+      "command": ["${month}"]
     }
   ]
 }
