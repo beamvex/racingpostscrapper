@@ -92,7 +92,8 @@ data "aws_iam_policy_document" "ecs_task_ecs" {
     ]
     resources = [
       "${aws_ecs_task_definition.scraper.arn_without_revision}:*",
-      "${aws_ecs_task_definition.backfiller.arn_without_revision}:*"
+      "${aws_ecs_task_definition.backfiller.arn_without_revision}:*",
+      "${aws_ecs_task_definition.processor.arn_without_revision}:*"
     ]
 
     condition {
@@ -159,7 +160,8 @@ data "aws_iam_policy_document" "eventbridge_ecs_run_task" {
       "ecs:RunTask"
     ]
     resources = [
-      "${aws_ecs_task_definition.scraper.arn_without_revision}:*"
+      "${aws_ecs_task_definition.scraper.arn_without_revision}:*",
+      "${aws_ecs_task_definition.processor.arn_without_revision}:*"
     ]
 
     condition {

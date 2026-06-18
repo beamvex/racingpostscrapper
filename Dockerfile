@@ -29,9 +29,14 @@ COPY ./app /app
 COPY ./terraform /app/terraform
 
 RUN cargo build --release
+RUN cargo build --release --bin full_result_parser_local_html
+RUN cargo build --release --bin full_result_html_dir_parser
 
 COPY ./scripts/runscript.sh /app/runscript.sh
 RUN chmod +x /app/runscript.sh
+
+COPY ./scripts/process_captured_s3.sh /app/process_captured_s3.sh
+RUN chmod +x /app/process_captured_s3.sh
 
 COPY ./scripts/backfill_last_2_years.sh /app/backfill_last_2_years.sh
 RUN chmod +x /app/backfill_last_2_years.sh
