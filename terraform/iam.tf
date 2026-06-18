@@ -234,11 +234,13 @@ data "aws_iam_policy_document" "glue_crawler" {
 
     actions = [
       "glue:CreateTable",
+      "glue:BatchGetTable",
       "glue:UpdateTable",
       "glue:GetTable",
       "glue:GetTables",
       "glue:CreatePartition",
       "glue:BatchCreatePartition",
+      "glue:BatchGetPartition",
       "glue:UpdatePartition",
       "glue:GetPartition",
       "glue:GetPartitions",
