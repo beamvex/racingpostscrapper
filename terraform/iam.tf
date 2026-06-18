@@ -208,7 +208,7 @@ data "aws_iam_policy_document" "glue_crawler_assume_role" {
 }
 
 resource "aws_iam_role" "glue_crawler" {
-  name               = "racingpost-glue-crawler"
+  name               = "racingpost-scraper-glue-crawler"
   assume_role_policy = data.aws_iam_policy_document.glue_crawler_assume_role.json
 }
 
