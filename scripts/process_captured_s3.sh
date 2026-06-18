@@ -26,7 +26,7 @@ echo "listing captured full-results html dirs in s3://${BUCKET}/"
 DIRS=$(aws s3 ls "s3://${BUCKET}/" --recursive | awk '{print $4}' | grep -- '-time-order-full-results-html/[^/]*\.html$' | sed 's#[^/]*\.html$##' | sort -u || true)
 
 if [ -n "${TARGET_MONTH}" ]; then
-  DIRS=$(echo "${DIRS}" | grep "/${YEAR}/${MONTH}/" || true)
+  DIRS=$(echo "${DIRS}" | grep -E "(^|/)${YEAR}/${MONTH}/" || true)
 fi
 
 if [ -z "${DIRS}" ]; then
