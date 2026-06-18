@@ -38,6 +38,9 @@ RUN chmod +x /app/runscript.sh
 COPY ./scripts/process_captured_s3.sh /app/process_captured_s3.sh
 RUN chmod +x /app/process_captured_s3.sh
 
+COPY ./scripts/trigger_processor_months.sh /app/trigger_processor_months.sh
+RUN chmod +x /app/trigger_processor_months.sh
+
 COPY ./scripts/backfill_last_2_years.sh /app/backfill_last_2_years.sh
 RUN chmod +x /app/backfill_last_2_years.sh
 
