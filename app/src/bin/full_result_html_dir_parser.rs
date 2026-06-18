@@ -35,13 +35,26 @@ async fn main() -> anyhow::Result<()> {
 
         let course = infer_course_from_filename(&path).unwrap_or_else(|| "".to_string());
         let url = "";
-        let race_json = full_result_parse::parse_full_result_page(&html, url, &course);
-        json.push(race_json);
+
+        let title = full_result_parse::extract_title(&html);
+        let race_id = full_result_parse::extract_race_id(&html);
+        let runners = full_result_parse::extract_runners_json(&html);
+
+        for runner_json in runners {
+            json.push(format!(
+                "{{\"url\":\"{}\",\"course\":\"{}\",\"title\":\"{}\",\"race_id\":\"{}\",\"runner\":{}}}",
+                full_result_parse::json_escape(url),
+                full_result_parse::json_escape(&course),
+                full_result_parse::json_escape(&title),
+                full_result_parse::json_escape(&race_id),
+                runner_json
+            ));
+        }
     }
 
     let json_out_path = output_json_path(&html_dir, &out_dir);
     eprintln!(
-        "parser(html-dir): writing {} races to {} (failed {})",
+        "parser(html-dir): writing {} runners to {} (failed {})",
         json.len(),
         json_out_path,
         failed

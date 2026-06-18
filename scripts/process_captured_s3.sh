@@ -48,11 +48,6 @@ for dir_key in ${DIRS}; do
   json_name=$(basename "${json_out}")
   processed_key="${PROCESSED_PREFIX}/${rel_dir}/${json_name}"
 
-  if aws s3 ls "s3://${BUCKET}/${processed_key}" >/dev/null 2>&1; then
-    echo "skipping (already processed) s3://${BUCKET}/${processed_key}"
-    continue
-  fi
-
   echo "parsing ${local_dir}/${html_dir_name}"
   /app/target/release/full_result_html_dir_parser --html-dir "${local_dir}/${html_dir_name}" --out-dir "${local_dir}"
 

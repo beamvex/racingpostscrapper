@@ -3,7 +3,7 @@ resource "aws_glue_catalog_database" "racingpost" {
 }
 
 resource "aws_glue_catalog_table" "processed_full_results" {
-  name          = "processed_full_results"
+  name          = "processed_full_results_runners"
   database_name = aws_glue_catalog_database.racingpost.name
   table_type    = "EXTERNAL_TABLE"
 
@@ -43,8 +43,8 @@ resource "aws_glue_catalog_table" "processed_full_results" {
     }
 
     columns {
-      name = "runners"
-      type = "array<struct<position:string,horse:string,jockey:string,trainer:string,age:string,weight_st:string,weight_lb:string,or:string,ts:string,rpr:string>>"
+      name = "runner"
+      type = "struct<position:string,horse:string,jockey:string,trainer:string,age:string,weight_st:string,weight_lb:string,or:string,ts:string,rpr:string>"
     }
   }
 }
