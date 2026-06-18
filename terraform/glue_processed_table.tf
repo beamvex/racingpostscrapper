@@ -92,4 +92,19 @@ resource "aws_glue_catalog_table" "processed_full_results" {
       type = "string"
     }
   }
+
+  partition_keys {
+    name = "year"
+    type = "string"
+  }
+
+  partition_keys {
+    name = "month"
+    type = "string"
+  }
+
+  partition_keys {
+    name = "day"
+    type = "string"
+  }
 }

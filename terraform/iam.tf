@@ -193,3 +193,77 @@ resource "aws_iam_role_policy" "eventbridge_ecs_run_task" {
   role   = aws_iam_role.eventbridge_ecs_run_task.id
   policy = data.aws_iam_policy_document.eventbridge_ecs_run_task.json
 }
+
+data "aws_iam_policy_document" "glue_crawler_assume_role" {
+  statement {
+    effect = "Allow"
+
+    principals {
+      type        = "Service"
+      identifiers = ["glue.amazonaws.com"]
+    }
+
+    actions = ["sts:AssumeRole"]
+  }
+}
+
+resource "aws_iam_role" "glue_crawler" {
+  name               = "racingpost-glue-crawler"
+  assume_role_policy = data.aws_iam_policy_document.glue_crawler_assume_role.json
+}
+
+data "aws_iam_policy_document" "glue_crawler" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject",
+      "s3:PutObject",
+      "s3:DeleteObject",
+      "s3:ListBucket"
+    ]
+
+    resources = [
+      aws_s3_bucket.scraper_data.arn,
+      "${aws_s3_bucket.scraper_data.arn}/*"
+    ]
+  }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "glue:CreateTable",
+      "glue:UpdateTable",
+      "glue:GetTable",
+      "glue:GetTables",
+      "glue:CreatePartition",
+      "glue:BatchCreatePartition",
+      "glue:UpdatePartition",
+      "glue:GetPartition",
+      "glue:GetPartitions",
+      "glue:GetDatabase",
+      "glue:GetDatabases"
+    ]
+
+    resources = ["*"]
+  }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents"
+    ]
+
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "glue_crawler" {
+  name   = "racingpost-glue-crawler"
+  role   = aws_iam_role.glue_crawler.id
+  policy = data.aws_iam_policy_document.glue_crawler.json
+}
