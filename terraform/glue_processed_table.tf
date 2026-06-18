@@ -43,8 +43,53 @@ resource "aws_glue_catalog_table" "processed_full_results" {
     }
 
     columns {
-      name = "runner"
-      type = "struct<position:string,horse:string,jockey:string,trainer:string,age:string,weight_st:string,weight_lb:string,or:string,ts:string,rpr:string>"
+      name = "position"
+      type = "string"
+    }
+
+    columns {
+      name = "horse"
+      type = "string"
+    }
+
+    columns {
+      name = "jockey"
+      type = "string"
+    }
+
+    columns {
+      name = "trainer"
+      type = "string"
+    }
+
+    columns {
+      name = "age"
+      type = "string"
+    }
+
+    columns {
+      name = "weight_st"
+      type = "string"
+    }
+
+    columns {
+      name = "weight_lb"
+      type = "string"
+    }
+
+    columns {
+      name = "or"
+      type = "string"
+    }
+
+    columns {
+      name = "ts"
+      type = "string"
+    }
+
+    columns {
+      name = "rpr"
+      type = "string"
     }
   }
 }
