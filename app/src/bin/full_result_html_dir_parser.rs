@@ -92,6 +92,6 @@ fn output_json_path(html_dir: &str, out_dir: &str) -> String {
 }
 
 fn write_json(json_out_path: &str, json: &[String]) -> anyhow::Result<()> {
-    std::fs::write(json_out_path, format!("[{}]", json.join(",")))
+    std::fs::write(json_out_path, json.join("\n"))
         .with_context(|| format!("write {json_out_path}"))
 }

@@ -9,10 +9,25 @@ fi
 BUCKET="${SCRAPER_DATA_BUCKET_NAME}"
 PROCESSED_PREFIX="${PROCESSED_PREFIX:-processed}"
 
+TARGET_MONTH="${1:-${PROCESS_MONTH:-}}"
+if [ -n "${TARGET_MONTH}" ]; then
+  YEAR="${TARGET_MONTH%-*}"
+  MONTH="${TARGET_MONTH#*-}"
+  if [ -z "${YEAR}" ] || [ -z "${MONTH}" ]; then
+    echo "invalid TARGET_MONTH (expected YYYY-MM): ${TARGET_MONTH}" >&2
+    exit 1
+  fi
+  echo "filtering to month ${YEAR}-${MONTH}"
+fi
+
 mkdir -p /data/captured
 
 echo "listing captured full-results html dirs in s3://${BUCKET}/"
 DIRS=$(aws s3 ls "s3://${BUCKET}/" --recursive | awk '{print $4}' | grep -- '-time-order-full-results-html/[^/]*\.html$' | sed 's#[^/]*\.html$##' | sort -u || true)
+
+if [ -n "${TARGET_MONTH}" ]; then
+  DIRS=$(echo "${DIRS}" | grep "/${YEAR}/${MONTH}/" || true)
+fi
 
 if [ -z "${DIRS}" ]; then
   echo "no captured full-results html found" >&2
