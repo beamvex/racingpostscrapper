@@ -16,6 +16,10 @@ pub fn extract_race_id(html: &str) -> String {
     race::extract_race_id(html)
 }
 
+pub fn extract_going(html: &str) -> String {
+    race::extract_going(html)
+}
+
 pub fn extract_runners_json(html: &str) -> Vec<String> {
     runner::extract_runners_json(html)
 }

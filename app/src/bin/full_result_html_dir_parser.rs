@@ -38,6 +38,7 @@ async fn main() -> anyhow::Result<()> {
 
         let title = full_result_parse::extract_title(&html);
         let race_id = full_result_parse::extract_race_id(&html);
+        let going = full_result_parse::extract_going(&html);
         let runners = full_result_parse::extract_runners_json(&html);
 
         for runner_json in runners {
@@ -46,11 +47,12 @@ async fn main() -> anyhow::Result<()> {
                 .trim_start_matches('{')
                 .trim_end_matches('}');
             json.push(format!(
-                "{{\"url\":\"{}\",\"course\":\"{}\",\"title\":\"{}\",\"race_id\":\"{}\",{}}}",
+                "{{\"url\":\"{}\",\"course\":\"{}\",\"title\":\"{}\",\"race_id\":\"{}\",\"going\":\"{}\",{}}}",
                 full_result_parse::json_escape(url),
                 full_result_parse::json_escape(&course),
                 full_result_parse::json_escape(&title),
                 full_result_parse::json_escape(&race_id),
+                full_result_parse::json_escape(&going),
                 runner_fields
             ));
         }
