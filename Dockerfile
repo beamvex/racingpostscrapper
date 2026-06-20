@@ -31,6 +31,7 @@ COPY ./terraform /app/terraform
 RUN cargo build --release
 RUN cargo build --release --bin full_result_parser_local_html
 RUN cargo build --release --bin full_result_html_dir_parser
+RUN cargo build --release --bin racecards_time_order_scraper
 
 COPY ./scripts/runscript.sh /app/runscript.sh
 RUN chmod +x /app/runscript.sh
