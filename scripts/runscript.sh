@@ -41,17 +41,32 @@ done
 echo "running scraper"
 if [ -n "$1" ]; then
   echo "date arg=$1"
+  RESULTS_DATE_USED="$1"
   /app/target/release/racingpost_scraper "$1"
 else
   if [ -n "${RESULTS_DATE}" ]; then
     echo "RESULTS_DATE=${RESULTS_DATE}"
+    RESULTS_DATE_USED="${RESULTS_DATE}"
   else
     echo "no date arg and RESULTS_DATE not set (default will be used)"
+    RESULTS_DATE_USED=""
   fi
   /app/target/release/racingpost_scraper
 fi
 
 aws s3 cp /data "s3://${SCRAPER_DATA_BUCKET_NAME}/" --recursive
+
+if [ -z "${RESULTS_DATE_USED}" ]; then
+  RESULTS_DATE_USED=$(/app/target/release/racingpost_scraper --help 2>/dev/null || true)
+fi
+
+PROCESS_MONTH="${RESULTS_DATE_USED:0:7}"
+if [ -n "${PROCESS_MONTH}" ]; then
+  echo "running processor for month ${PROCESS_MONTH}"
+  /app/process_captured_s3.sh "${PROCESS_MONTH}"
+else
+  echo "could not infer process month; skipping processor" >&2
+fi
 
 SCRAPER_EXIT=$?
 
