@@ -78,8 +78,46 @@ fn parse_one_racecard_html(html: &str) -> anyhow::Result<Vec<String>> {
     if let Some(next_data) = extract_next_data_json(html) {
         if let Ok(v) = serde_json::from_str::<Value>(&next_data) {
             let meta = extract_race_meta(&v);
-            let runners = extract_runners(&v);
+            let mut runners = extract_runners(&v);
             if !runners.is_empty() {
+                // Next.js runner objects sometimes omit weight, but it is present in the rendered HTML.
+                // Backfill missing weights by matching on horse name.
+                if runners.iter().any(|r| r.weight_st.as_deref().unwrap_or("").is_empty()) {
+                    let html_runners = extract_runners_from_html(html);
+                    let mut by_horse: HashMap<String, (Option<String>, Option<String>, Option<String>)> =
+                        HashMap::new();
+                    for hr in html_runners {
+                        if let Some(h) = hr.horse.as_deref() {
+                            if !h.trim().is_empty() {
+                                by_horse.insert(
+                                    h.trim().to_lowercase(),
+                                    (hr.weight, hr.weight_st, hr.weight_lb),
+                                );
+                            }
+                        }
+                    }
+                    for r in runners.iter_mut() {
+                        let missing = r.weight_st.as_deref().unwrap_or("").is_empty()
+                            || r.weight_lb.as_deref().unwrap_or("").is_empty();
+                        if !missing {
+                            continue;
+                        }
+                        let Some(h) = r.horse.as_deref() else { continue };
+                        let key = h.trim().to_lowercase();
+                        if let Some((w, st, lb)) = by_horse.get(&key) {
+                            if r.weight.is_none() {
+                                r.weight = w.clone();
+                            }
+                            if r.weight_st.is_none() {
+                                r.weight_st = st.clone();
+                            }
+                            if r.weight_lb.is_none() {
+                                r.weight_lb = lb.clone();
+                            }
+                        }
+                    }
+                }
+
                 return Ok(build_lines(meta, runners));
             }
         }
@@ -108,7 +146,7 @@ fn build_lines(meta: RaceMeta, runners: Vec<RunnerRec>) -> Vec<String> {
     let mut out = Vec::with_capacity(runners.len());
     for r in runners {
         out.push(format!(
-            "{{\"course\":\"{}\",\"time\":\"{}\",\"race_name\":\"{}\",\"going\":\"{}\",\"horse\":\"{}\",\"jockey\":\"{}\",\"trainer\":\"{}\",\"age\":\"{}\",\"weight\":\"{}\"}}",
+            "{{\"course\":\"{}\",\"time\":\"{}\",\"race_name\":\"{}\",\"going\":\"{}\",\"horse\":\"{}\",\"jockey\":\"{}\",\"trainer\":\"{}\",\"age\":\"{}\",\"weight\":\"{}\",\"weight_st\":\"{}\",\"weight_lb\":\"{}\"}}",
             json_escape(meta.course.as_deref().unwrap_or("")),
             json_escape(meta.time.as_deref().unwrap_or("")),
             json_escape(meta.race_name.as_deref().unwrap_or("")),
@@ -117,7 +155,9 @@ fn build_lines(meta: RaceMeta, runners: Vec<RunnerRec>) -> Vec<String> {
             json_escape(r.jockey.as_deref().unwrap_or("")),
             json_escape(r.trainer.as_deref().unwrap_or("")),
             json_escape(r.age.as_deref().unwrap_or("")),
-            json_escape(r.weight.as_deref().unwrap_or(""))
+            json_escape(r.weight.as_deref().unwrap_or("")),
+            json_escape(r.weight_st.as_deref().unwrap_or("")),
+            json_escape(r.weight_lb.as_deref().unwrap_or(""))
         ));
     }
     out
@@ -250,8 +290,22 @@ fn extract_runners_from_html(html: &str) -> Vec<RunnerRec> {
             .and_then(|s| extract_text_after(&s, ">"))
             .map(|s| s.trim().to_string());
 
-        let age = find_age_yo(block);
-        let weight = find_weight_st_lb(block);
+        let age = extract_first_testid_text(block, &["Text__Age", "Text__HorseAge"])
+            .or_else(|| find_age_yo(block));
+        let weight_text = extract_first_testid_text(
+            block,
+            &["Text__Weight", "Text__Wgt", "Text__HorseWeight", "Text__WeightValue"],
+        )
+        .or_else(|| find_weight_st_lb(block))
+        .or_else(|| find_weight_dash(block));
+
+        let (weight, weight_st, weight_lb) = match weight_text.as_deref() {
+            Some(t) => {
+                let (st, lb) = parse_weight_to_st_lb(t);
+                (Some(t.to_string()), st, lb)
+            }
+            None => (None, None, None),
+        };
 
         if horse.as_deref().unwrap_or("").is_empty() {
             start = next;
@@ -264,6 +318,8 @@ fn extract_runners_from_html(html: &str) -> Vec<RunnerRec> {
             trainer,
             age,
             weight,
+            weight_st,
+            weight_lb,
         });
 
         start = next;
@@ -272,56 +328,119 @@ fn extract_runners_from_html(html: &str) -> Vec<RunnerRec> {
     out
 }
 
-fn find_age_yo(s: &str) -> Option<String> {
-    let bytes = s.as_bytes();
-    for i in 0..bytes.len().saturating_sub(2) {
-        if bytes[i].is_ascii_digit() && bytes.get(i + 1) == Some(&b'y') {
-            continue;
-        }
-        // pattern like '>5</span>yo' or '5yo'
-        if bytes[i].is_ascii_digit() {
-            if s[i..].starts_with("yo") {
-                return Some(s[i..i + 1].to_string());
-            }
-            if i + 2 < bytes.len() && bytes[i + 1].is_ascii_digit() && s[i + 2..].starts_with("yo") {
-                return Some(s[i..i + 2].to_string());
+fn extract_first_testid_text(s: &str, testids: &[&str]) -> Option<String> {
+    for t in testids {
+        let needle = format!("data-testid=\"{}\"", t);
+        if let Some(v) = extract_text_after(s, &needle) {
+            let v = v.trim();
+            if !v.is_empty() {
+                return Some(v.to_string());
             }
         }
     }
     None
 }
 
-fn find_weight_st_lb(s: &str) -> Option<String> {
-    // Look for patterns like '9</span>st <span...>5</span>lb'
-    let st_idx = s.find("st")?;
-    let head = &s[..st_idx];
-    let st_num = head
-        .chars()
-        .rev()
-        .skip_while(|c| !c.is_ascii_digit())
-        .take_while(|c| c.is_ascii_digit())
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect::<String>();
+fn find_age_yo(s: &str) -> Option<String> {
+    // Look for patterns like '5yo' or '10yo'.
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if !bytes[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
 
-    let after = &s[st_idx..];
-    let lb_idx = after.find("lb")?;
-    let lb_head = &after[..lb_idx];
-    let lb_num = lb_head
-        .chars()
-        .rev()
-        .skip_while(|c| !c.is_ascii_digit())
-        .take_while(|c| c.is_ascii_digit())
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect::<String>();
+        let start = i;
+        i += 1;
+        if i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
 
-    if st_num.is_empty() || lb_num.is_empty() {
-        return None;
+        if i + 1 < bytes.len() && bytes[i] == b'y' && bytes[i + 1] == b'o' {
+            return Some(s[start..i].to_string());
+        }
     }
-    Some(format!("{}st {}lb", st_num, lb_num))
+    None
+}
+
+fn find_weight_st_lb(s: &str) -> Option<String> {
+    // Look for patterns like '9</span>st <span...>5</span>lb'.
+    // Some pages render an *empty* weight placeholder elsewhere in the same runner block
+    // ('</span>st </span>lb'), so we must scan for the first valid occurrence.
+    let mut search_from = 0usize;
+    while let Some(rel_st_idx) = s[search_from..].find("st") {
+        let st_idx = search_from + rel_st_idx;
+        let head = &s[..st_idx];
+        let st_num = head
+            .chars()
+            .rev()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+
+        let after = &s[st_idx..];
+        let Some(lb_rel_idx) = after.find("lb") else {
+            return None;
+        };
+        let lb_head = &after[..lb_rel_idx];
+        let lb_num = lb_head
+            .chars()
+            .rev()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>();
+
+        if !st_num.is_empty() && !lb_num.is_empty() {
+            return Some(format!("{}st {}lb", st_num, lb_num));
+        }
+
+        search_from = st_idx + 2;
+    }
+
+    None
+}
+
+fn find_weight_dash(s: &str) -> Option<String> {
+    // Alternative format sometimes used: '9-05' meaning 9st 5lb.
+    let bytes = s.as_bytes();
+    for i in 0..bytes.len().saturating_sub(3) {
+        if !bytes[i].is_ascii_digit() {
+            continue;
+        }
+        let mut j = i;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j >= bytes.len() || bytes[j] != b'-' {
+            continue;
+        }
+        let st = &s[i..j];
+        let mut k = j + 1;
+        while k < bytes.len() && bytes[k].is_ascii_digit() {
+            k += 1;
+        }
+        if k == j + 1 {
+            continue;
+        }
+        let lb = &s[j + 1..k];
+
+        // keep it reasonably bounded
+        if st.len() <= 2 && lb.len() <= 2 {
+            let st = st.trim_start_matches('0');
+            let st = if st.is_empty() { "0" } else { st };
+            let lb = lb.trim_start_matches('0');
+            let lb = if lb.is_empty() { "0" } else { lb };
+            return Some(format!("{}st {}lb", st, lb));
+        }
+    }
+    None
 }
 
 fn extract_text_after(haystack: &str, needle: &str) -> Option<String> {
@@ -355,6 +474,8 @@ struct RunnerRec {
     trainer: Option<String>,
     age: Option<String>,
     weight: Option<String>,
+    weight_st: Option<String>,
+    weight_lb: Option<String>,
 }
 
 fn extract_race_meta(v: &Value) -> RaceMeta {
@@ -413,8 +534,8 @@ fn extract_runners(v: &Value) -> Vec<RunnerRec> {
             let horse = first_string(obj, &["horseName", "horse", "name"]);
             let jockey = first_string(obj, &["jockeyName", "jockey"]);
             let trainer = first_string(obj, &["trainerName", "trainer"]);
-            let age = first_string(obj, &["age"]);
-            let weight = first_string(obj, &["weight", "weightText", "weightStLb", "weightDisplay"]);
+            let age = first_string_or_number(obj, &["age", "horseAge", "ageYears", "ageYrs"]);
+            let (weight, weight_st, weight_lb) = extract_weight_any(obj);
 
             let looks_like_runner = horse.is_some() && (jockey.is_some() || trainer.is_some());
             if looks_like_runner {
@@ -424,6 +545,8 @@ fn extract_runners(v: &Value) -> Vec<RunnerRec> {
                     trainer,
                     age,
                     weight,
+                    weight_st,
+                    weight_lb,
                 });
             }
         }
@@ -447,6 +570,153 @@ fn first_string(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<S
                     return Some(s.to_string());
                 }
             }
+        }
+    }
+    None
+}
+
+fn first_string_or_number(obj: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    for k in keys {
+        let Some(v) = obj.get(*k) else { continue };
+        match v {
+            Value::String(s) => {
+                let s = s.trim();
+                if !s.is_empty() {
+                    return Some(s.to_string());
+                }
+            }
+            Value::Number(n) => return Some(n.to_string()),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn extract_weight_any(obj: &serde_json::Map<String, Value>) -> (Option<String>, Option<String>, Option<String>) {
+    extract_weight_any_impl(obj).unwrap_or((None, None, None))
+}
+
+fn extract_weight_any_impl(
+    obj: &serde_json::Map<String, Value>,
+) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    let keys = [
+        "weight",
+        "weightText",
+        "weightStLb",
+        "weightDisplay",
+        "weightValue",
+        "wgt",
+        "wgtText",
+        "horseWeight",
+    ];
+
+    for k in keys {
+        let Some(v) = obj.get(k) else { continue };
+        match v {
+            Value::String(s) => {
+                let s = s.trim();
+                if !s.is_empty() {
+                    let (st, lb) = parse_weight_to_st_lb(s);
+                    return Some((Some(s.to_string()), st, lb));
+                }
+            }
+            Value::Number(n) => return Some((Some(n.to_string()), None, None)),
+            Value::Object(o) => {
+                if let (Some(st), Some(lb)) = (
+                    first_string_or_number(o, &["st", "stones", "stone"]),
+                    first_string_or_number(o, &["lb", "pounds", "lbs"]),
+                ) {
+                    return Some((Some(format!("{}st {}lb", st, lb)), Some(st), Some(lb)));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    for sub in ["weight", "wgt"] {
+        if let Some(Value::Object(o)) = obj.get(sub) {
+            if let (Some(st), Some(lb)) = (
+                first_string_or_number(o, &["st", "stones", "stone"]),
+                first_string_or_number(o, &["lb", "pounds", "lbs"]),
+            ) {
+                return Some((Some(format!("{}st {}lb", st, lb)), Some(st), Some(lb)));
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_weight_to_st_lb(s: &str) -> (Option<String>, Option<String>) {
+    if let Some((st, lb)) = parse_weight_st_lb_from_st_lb(s) {
+        return (Some(st), Some(lb));
+    }
+    if let Some((st, lb)) = parse_weight_st_lb_from_dash(s) {
+        return (Some(st), Some(lb));
+    }
+    (None, None)
+}
+
+fn parse_weight_st_lb_from_st_lb(s: &str) -> Option<(String, String)> {
+    let st_idx = s.find("st")?;
+    let head = &s[..st_idx];
+    let st_num = head
+        .chars()
+        .rev()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+
+    let after = &s[st_idx..];
+    let lb_idx = after.find("lb")?;
+    let lb_head = &after[..lb_idx];
+    let lb_num = lb_head
+        .chars()
+        .rev()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(|c| c.is_ascii_digit())
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect::<String>();
+
+    if st_num.is_empty() || lb_num.is_empty() {
+        return None;
+    }
+    Some((st_num, lb_num))
+}
+
+fn parse_weight_st_lb_from_dash(s: &str) -> Option<(String, String)> {
+    let bytes = s.as_bytes();
+    for i in 0..bytes.len().saturating_sub(3) {
+        if !bytes[i].is_ascii_digit() {
+            continue;
+        }
+        let mut j = i;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j >= bytes.len() || bytes[j] != b'-' {
+            continue;
+        }
+        let st = &s[i..j];
+        let mut k = j + 1;
+        while k < bytes.len() && bytes[k].is_ascii_digit() {
+            k += 1;
+        }
+        if k == j + 1 {
+            continue;
+        }
+        let lb = &s[j + 1..k];
+        if st.len() <= 2 && lb.len() <= 2 {
+            let st = st.trim_start_matches('0');
+            let st = if st.is_empty() { "0" } else { st };
+            let lb = lb.trim_start_matches('0');
+            let lb = if lb.is_empty() { "0" } else { lb };
+            return Some((st.to_string(), lb.to_string()));
         }
     }
     None
