@@ -23,6 +23,21 @@ pub fn extract_going(html: &str) -> String {
         }
     }
 
+    // Common legacy markup:
+    // <span class="rp-raceTimeCourseName_condition">Good To Soft</span>
+    if let Some(g) = find_between(html, "<span class=\"rp-raceTimeCourseName_condition\">", "</span>") {
+        let g = g
+            .replace("\n", " ")
+            .replace("\t", " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let g = g.trim();
+        if !g.is_empty() {
+            return g.to_string();
+        }
+    }
+
     // Fallback: try common HTML label patterns.
     if let Some(g) = find_between(html, "Going</span>", "</") {
         let g = g.trim();
