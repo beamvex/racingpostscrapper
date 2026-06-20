@@ -599,6 +599,14 @@ fn extract_weight_any(obj: &serde_json::Map<String, Value>) -> (Option<String>, 
 fn extract_weight_any_impl(
     obj: &serde_json::Map<String, Value>,
 ) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    // Common fields in Next.js runner objects.
+    if let (Some(st), Some(lb)) = (
+        first_string_or_number(obj, &["formattedWeightStones", "weightStones", "stones"]),
+        first_string_or_number(obj, &["formattedWeightPounds", "weightPounds", "pounds"]),
+    ) {
+        return Some((Some(format!("{}st {}lb", st, lb)), Some(st), Some(lb)));
+    }
+
     let keys = [
         "weight",
         "weightText",
