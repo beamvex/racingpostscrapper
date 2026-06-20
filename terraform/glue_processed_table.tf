@@ -43,6 +43,11 @@ resource "aws_glue_catalog_table" "processed_full_results" {
     }
 
     columns {
+      name = "going"
+      type = "string"
+    }
+
+    columns {
       name = "position"
       type = "string"
     }
