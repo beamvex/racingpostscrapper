@@ -1,10 +1,10 @@
 use anyhow::Context;
-use serde_json::Value;
-use std::collections::HashMap;
+use serde_json::{Map, Value};
+use std::collections::{HashMap, HashSet};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let (html_dir, out_path) = parse_args();
+    let (html_dir, out_path, athena_db, athena_racecard_table, athena_results_table) = parse_args();
 
     eprintln!("racecard-parser: html_dir={html_dir}");
     eprintln!("racecard-parser: out_path={out_path}");
@@ -18,6 +18,10 @@ async fn main() -> anyhow::Result<()> {
     html_paths.sort();
 
     let mut lines = Vec::<String>::new();
+    let mut races: Vec<(RaceMeta, Vec<RunnerRec>)> = Vec::new();
+    let mut horses: HashSet<String> = HashSet::new();
+    let mut jockeys: HashSet<String> = HashSet::new();
+    let mut trainers: HashSet<String> = HashSet::new();
     let mut failed = 0usize;
 
     for path in html_paths {
@@ -32,9 +36,34 @@ async fn main() -> anyhow::Result<()> {
         };
 
         match parse_one_racecard_html(&html) {
-            Ok(records) => {
-                for r in records {
-                    lines.push(r);
+            Ok((meta, runners)) => {
+                if !out_path.ends_with(".json") {
+                    for r in build_lines(meta.clone(), runners.clone()) {
+                        lines.push(r);
+                    }
+                } else {
+                    races.push((meta.clone(), runners.clone()));
+                }
+
+                for rr in runners {
+                    if let Some(h) = rr.horse.as_deref() {
+                        let h = h.trim();
+                        if !h.is_empty() {
+                            horses.insert(h.to_string());
+                        }
+                    }
+                    if let Some(j) = rr.jockey.as_deref() {
+                        let j = j.trim();
+                        if !j.is_empty() {
+                            jockeys.insert(j.to_string());
+                        }
+                    }
+                    if let Some(t) = rr.trainer.as_deref() {
+                        let t = t.trim();
+                        if !t.is_empty() {
+                            trainers.insert(t.to_string());
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -50,19 +79,62 @@ async fn main() -> anyhow::Result<()> {
         failed
     );
 
-    std::fs::write(&out_path, lines.join("\n")).with_context(|| format!("write {out_path}"))?;
+    if out_path.ends_with(".json") {
+        let mut races_json = Vec::<Value>::new();
+        for (meta, runners) in races {
+            races_json.push(race_to_json_value(&meta, &runners));
+        }
+        let s = serde_json::to_string_pretty(&Value::Array(races_json))
+            .with_context(|| "serialize races json")?;
+        std::fs::write(&out_path, s).with_context(|| format!("write {out_path}"))?;
+    } else {
+        std::fs::write(&out_path, lines.join("\n")).with_context(|| format!("write {out_path}"))?;
+    }
+
+    if let Some((year, month, day)) =
+        infer_ymd_from_path(&html_dir).or_else(|| infer_ymd_from_path(&out_path))
+    {
+        let sql = build_athena_history_sql_for_day(
+            &athena_db,
+            &athena_racecard_table,
+            &athena_results_table,
+            &year,
+            &month,
+            &day,
+            &horses,
+            &jockeys,
+            &trainers,
+        );
+        let out_dir = std::path::Path::new(&out_path)
+            .parent()
+            .and_then(|p| p.to_str())
+            .unwrap_or("/data")
+            .trim_end_matches('/');
+        let sql_path = format!(
+            "{}/racingpost-racecards-{}-{}-{}-history.sql",
+            out_dir, year, month, day
+        );
+        std::fs::write(&sql_path, sql).with_context(|| format!("write {sql_path}"))?;
+        eprintln!("racecard-parser: wrote athena sql to {sql_path}");
+    }
     Ok(())
 }
 
-fn parse_args() -> (String, String) {
+fn parse_args() -> (String, String, String, String, String) {
     let mut html_dir: Option<String> = None;
     let mut out_path: Option<String> = None;
+    let mut athena_db: Option<String> = None;
+    let mut athena_racecard_table: Option<String> = None;
+    let mut athena_results_table: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--html-dir" | "-d" => html_dir = args.next(),
             "--out" | "-o" => out_path = args.next(),
+            "--athena-db" => athena_db = args.next(),
+            "--athena-racecard-table" => athena_racecard_table = args.next(),
+            "--athena-results-table" => athena_results_table = args.next(),
             _ => {}
         }
     }
@@ -70,10 +142,102 @@ fn parse_args() -> (String, String) {
     (
         html_dir.unwrap_or_else(|| "/data".to_string()),
         out_path.unwrap_or_else(|| "/data/racecards-runners.jsonl".to_string()),
+        athena_db.unwrap_or_else(|| "racingpost".to_string()),
+        athena_racecard_table.unwrap_or_else(|| "racecard_runners".to_string()),
+        athena_results_table.unwrap_or_else(|| "processed_full_results_runners".to_string()),
     )
 }
 
-fn parse_one_racecard_html(html: &str) -> anyhow::Result<Vec<String>> {
+fn infer_ymd_from_path(path: &str) -> Option<(String, String, String)> {
+    let p = path.replace('\\', "/");
+    let parts: Vec<&str> = p.split('/').filter(|s| !s.is_empty()).collect();
+    for i in 0..parts.len().saturating_sub(2) {
+        let y = parts[i];
+        let m = parts[i + 1];
+        let d = parts[i + 2];
+        if y.len() == 4
+            && m.len() == 2
+            && d.len() == 2
+            && y.chars().all(|c| c.is_ascii_digit())
+            && m.chars().all(|c| c.is_ascii_digit())
+            && d.chars().all(|c| c.is_ascii_digit())
+        {
+            return Some((y.to_string(), m.to_string(), d.to_string()));
+        }
+    }
+    None
+}
+
+fn build_athena_history_sql_for_day(
+    db: &str,
+    racecard_table: &str,
+    results_table: &str,
+    year: &str,
+    month: &str,
+    day: &str,
+    horses: &HashSet<String>,
+    jockeys: &HashSet<String>,
+    trainers: &HashSet<String>,
+) -> String {
+    let _ = (racecard_table, year, month, day);
+
+    let horse_in = build_in_list_sql(horses);
+    let jockey_in = build_in_list_sql(jockeys);
+    let trainer_in = build_in_list_sql(trainers);
+
+    let mut preds: Vec<String> = Vec::new();
+    if let Some(v) = horse_in {
+        preds.push(format!("r.horse IN ({})", v));
+    }
+    if let Some(v) = jockey_in {
+        preds.push(format!("r.jockey IN ({})", v));
+    }
+    if let Some(v) = trainer_in {
+        preds.push(format!("r.trainer IN ({})", v));
+    }
+
+    let where_clause = if preds.is_empty() {
+        "1 = 0".to_string()
+    } else {
+        preds.join("\n   OR ")
+    };
+
+    format!(
+        "SELECT\n  r.*\nFROM {db}.{results_table} r\nWHERE {where_clause}\nORDER BY year, month, day, course, title, position;\n"
+    )
+}
+
+fn build_in_list_sql(values: &HashSet<String>) -> Option<String> {
+    if values.is_empty() {
+        return None;
+    }
+    let mut items: Vec<&String> = values.iter().collect();
+    items.sort();
+    Some(
+        items
+            .into_iter()
+            .map(|s| sql_string_literal(s))
+            .collect::<Vec<_>>()
+            .join(", "),
+    )
+}
+
+fn sql_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if c == '\'' {
+            out.push('\'');
+            out.push('\'');
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
+}
+
+fn parse_one_racecard_html(html: &str) -> anyhow::Result<(RaceMeta, Vec<RunnerRec>)> {
     // Prefer structured Next.js data if available, but fall back to HTML parsing.
     if let Some(next_data) = extract_next_data_json(html) {
         if let Ok(v) = serde_json::from_str::<Value>(&next_data) {
@@ -118,7 +282,7 @@ fn parse_one_racecard_html(html: &str) -> anyhow::Result<Vec<String>> {
                     }
                 }
 
-                return Ok(build_lines(meta, runners));
+                return Ok((meta, runners));
             }
         }
     }
@@ -139,7 +303,64 @@ fn parse_one_racecard_html(html: &str) -> anyhow::Result<Vec<String>> {
         anyhow::bail!("no runners found")
     }
 
-    Ok(build_lines(meta, runners))
+    Ok((meta, runners))
+}
+
+fn race_to_json_value(meta: &RaceMeta, runners: &[RunnerRec]) -> Value {
+    let mut obj = Map::<String, Value>::new();
+    obj.insert(
+        "course".to_string(),
+        Value::String(meta.course.clone().unwrap_or_default()),
+    );
+    obj.insert(
+        "time".to_string(),
+        Value::String(meta.time.clone().unwrap_or_default()),
+    );
+    obj.insert(
+        "race_name".to_string(),
+        Value::String(meta.race_name.clone().unwrap_or_default()),
+    );
+    obj.insert(
+        "going".to_string(),
+        Value::String(meta.going.clone().unwrap_or_default()),
+    );
+
+    let mut runners_out = Vec::<Value>::with_capacity(runners.len());
+    for r in runners {
+        let mut ro = Map::<String, Value>::new();
+        ro.insert(
+            "horse".to_string(),
+            Value::String(r.horse.clone().unwrap_or_default()),
+        );
+        ro.insert(
+            "jockey".to_string(),
+            Value::String(r.jockey.clone().unwrap_or_default()),
+        );
+        ro.insert(
+            "trainer".to_string(),
+            Value::String(r.trainer.clone().unwrap_or_default()),
+        );
+        ro.insert(
+            "age".to_string(),
+            Value::String(r.age.clone().unwrap_or_default()),
+        );
+        ro.insert(
+            "weight".to_string(),
+            Value::String(r.weight.clone().unwrap_or_default()),
+        );
+        ro.insert(
+            "weight_st".to_string(),
+            Value::String(r.weight_st.clone().unwrap_or_default()),
+        );
+        ro.insert(
+            "weight_lb".to_string(),
+            Value::String(r.weight_lb.clone().unwrap_or_default()),
+        );
+        runners_out.push(Value::Object(ro));
+    }
+    obj.insert("runners".to_string(), Value::Array(runners_out));
+
+    Value::Object(obj)
 }
 
 fn build_lines(meta: RaceMeta, runners: Vec<RunnerRec>) -> Vec<String> {

@@ -12,4 +12,4 @@ docker run --rm -it -p 3001:3001 \
   --entrypoint "/app/target/release/racecard_html_dir_parser" \
   racingpost-scrapper:latest \
   --html-dir /data/2026/06/20/racingpost-racecards-2026-06-20-racecards-html \
-  --out /data/2026/06/20/racingpost-racecards-2026-06-20-runners.jsonl
+  --out /data/2026/06/20/racingpost-racecards-2026-06-20-runners.json
