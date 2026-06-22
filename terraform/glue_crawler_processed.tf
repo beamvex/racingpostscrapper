@@ -19,7 +19,7 @@ resource "aws_glue_crawler" "processed" {
 
   schema_change_policy {
     update_behavior = "UPDATE_IN_DATABASE"
-    delete_behavior = "DEPRECATE_IN_DATABASE"
+    delete_behavior = "LOG"
   }
 }
 
