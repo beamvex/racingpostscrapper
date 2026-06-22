@@ -4,7 +4,15 @@ use std::collections::{HashMap, HashSet};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let (html_dir, out_path, athena_db, athena_racecard_table, athena_results_table) = parse_args();
+    let (
+        html_dir,
+        out_path,
+        athena_db,
+        athena_racecard_table,
+        athena_results_table,
+        athena_history_db,
+        athena_history_s3_prefix,
+    ) = parse_args();
 
     eprintln!("racecard-parser: html_dir={html_dir}");
     eprintln!("racecard-parser: out_path={out_path}");
@@ -98,6 +106,8 @@ async fn main() -> anyhow::Result<()> {
             &athena_db,
             &athena_racecard_table,
             &athena_results_table,
+            &athena_history_db,
+            &athena_history_s3_prefix,
             &year,
             &month,
             &day,
@@ -120,12 +130,14 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn parse_args() -> (String, String, String, String, String) {
+fn parse_args() -> (String, String, String, String, String, String, String) {
     let mut html_dir: Option<String> = None;
     let mut out_path: Option<String> = None;
     let mut athena_db: Option<String> = None;
     let mut athena_racecard_table: Option<String> = None;
     let mut athena_results_table: Option<String> = None;
+    let mut athena_history_db: Option<String> = None;
+    let mut athena_history_s3_prefix: Option<String> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -135,9 +147,22 @@ fn parse_args() -> (String, String, String, String, String) {
             "--athena-db" => athena_db = args.next(),
             "--athena-racecard-table" => athena_racecard_table = args.next(),
             "--athena-results-table" => athena_results_table = args.next(),
+            "--athena-history-db" => athena_history_db = args.next(),
+            "--athena-history-s3-prefix" => athena_history_s3_prefix = args.next(),
             _ => {}
         }
     }
+
+    let default_history_prefix = if let Ok(bucket) = std::env::var("S3_BUCKET_NAME") {
+        let b = bucket.trim();
+        if b.is_empty() {
+            "".to_string()
+        } else {
+            format!("s3://{}/athena/history", b)
+        }
+    } else {
+        "".to_string()
+    };
 
     (
         html_dir.unwrap_or_else(|| "/data".to_string()),
@@ -145,6 +170,8 @@ fn parse_args() -> (String, String, String, String, String) {
         athena_db.unwrap_or_else(|| "racingpost".to_string()),
         athena_racecard_table.unwrap_or_else(|| "racecard_runners".to_string()),
         athena_results_table.unwrap_or_else(|| "processed_full_results_runners".to_string()),
+        athena_history_db.unwrap_or_else(|| "racingpost_daily".to_string()),
+        athena_history_s3_prefix.unwrap_or(default_history_prefix),
     )
 }
 
@@ -172,6 +199,8 @@ fn build_athena_history_sql_for_day(
     db: &str,
     racecard_table: &str,
     results_table: &str,
+    history_db: &str,
+    history_s3_prefix: &str,
     year: &str,
     month: &str,
     day: &str,
@@ -179,7 +208,7 @@ fn build_athena_history_sql_for_day(
     jockeys: &HashSet<String>,
     trainers: &HashSet<String>,
 ) -> String {
-    let _ = (racecard_table, year, month, day);
+    let _ = racecard_table;
 
     let horse_in = build_in_list_sql(horses);
     let jockey_in = build_in_list_sql(jockeys);
@@ -202,8 +231,28 @@ fn build_athena_history_sql_for_day(
         preds.join("\n   OR ")
     };
 
+    let external_location = if history_s3_prefix.trim().is_empty() {
+        "".to_string()
+    } else {
+        format!(
+            "{}/{}/{}/{}/",
+            history_s3_prefix.trim_end_matches('/'),
+            year,
+            month,
+            day
+        )
+    };
+
+    let table_name = format!("history_{}_{}_{}", year, month, day);
+
+    if external_location.is_empty() {
+        return format!(
+            "SELECT\n  r.*\nFROM {db}.{results_table} r\nWHERE {where_clause}\nORDER BY year, month, day, course, title, position;\n"
+        );
+    }
+
     format!(
-        "SELECT\n  r.*\nFROM {db}.{results_table} r\nWHERE {where_clause}\nORDER BY year, month, day, course, title, position;\n"
+        "CREATE DATABASE IF NOT EXISTS {history_db};\n\nDROP TABLE IF EXISTS {history_db}.{table_name};\n\nCREATE TABLE {history_db}.{table_name}\nWITH (\n  format = 'PARQUET',\n  parquet_compression = 'SNAPPY',\n  external_location = '{external_location}'\n) AS\nSELECT\n  r.*\nFROM {db}.{results_table} r\nWHERE {where_clause}\n;\n"
     )
 }
 
