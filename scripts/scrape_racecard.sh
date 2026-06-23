@@ -78,20 +78,91 @@ if [ "${SCRAPER_EXIT}" -eq 0 ]; then
       echo "running athena query"
       AWS_REGION_USED="${AWS_REGION:-eu-west-2}"
       AWS_PROFILE_USED="${AWS_PROFILE:-}"
-      if [ -n "${AWS_PROFILE_USED}" ]; then
-        aws athena start-query-execution \
-          --region "${AWS_REGION_USED}" \
-          --profile "${AWS_PROFILE_USED}" \
-          --query-string "$(cat "${SQL_FILE}")" \
-          --query-execution-context Database=racingpost \
-          --result-configuration "OutputLocation=${ATHENA_OUTPUT_LOCATION}"
-      else
-        aws athena start-query-execution \
-          --region "${AWS_REGION_USED}" \
-          --query-string "$(cat "${SQL_FILE}")" \
-          --query-execution-context Database=racingpost \
-          --result-configuration "OutputLocation=${ATHENA_OUTPUT_LOCATION}"
-      fi
+
+      athena_start() {
+        local q="$1"
+        if [ -n "${AWS_PROFILE_USED}" ]; then
+          aws athena start-query-execution \
+            --region "${AWS_REGION_USED}" \
+            --profile "${AWS_PROFILE_USED}" \
+            --work-group primary \
+            --query-string "${q}" \
+            --query-execution-context Database=racingpost \
+            --result-configuration "OutputLocation=${ATHENA_OUTPUT_LOCATION}" \
+            --output text \
+            --query 'QueryExecutionId'
+        else
+          aws athena start-query-execution \
+            --region "${AWS_REGION_USED}" \
+            --work-group primary \
+            --query-string "${q}" \
+            --query-execution-context Database=racingpost \
+            --result-configuration "OutputLocation=${ATHENA_OUTPUT_LOCATION}" \
+            --output text \
+            --query 'QueryExecutionId'
+        fi
+      }
+
+      athena_wait() {
+        local id="$1"
+        local state=""
+        local i=0
+        while true; do
+          if [ -n "${AWS_PROFILE_USED}" ]; then
+            state=$(aws athena get-query-execution \
+              --region "${AWS_REGION_USED}" \
+              --profile "${AWS_PROFILE_USED}" \
+              --query-execution-id "${id}" \
+              --output text \
+              --query 'QueryExecution.Status.State')
+          else
+            state=$(aws athena get-query-execution \
+              --region "${AWS_REGION_USED}" \
+              --query-execution-id "${id}" \
+              --output text \
+              --query 'QueryExecution.Status.State')
+          fi
+
+          if [ "${state}" = "SUCCEEDED" ]; then
+            return 0
+          fi
+          if [ "${state}" = "FAILED" ] || [ "${state}" = "CANCELLED" ]; then
+            if [ -n "${AWS_PROFILE_USED}" ]; then
+              aws athena get-query-execution \
+                --region "${AWS_REGION_USED}" \
+                --profile "${AWS_PROFILE_USED}" \
+                --query-execution-id "${id}" \
+                --query 'QueryExecution.Status.StateChangeReason' \
+                --output text >&2 || true
+            else
+              aws athena get-query-execution \
+                --region "${AWS_REGION_USED}" \
+                --query-execution-id "${id}" \
+                --query 'QueryExecution.Status.StateChangeReason' \
+                --output text >&2 || true
+            fi
+            return 1
+          fi
+
+          i=$((i+1))
+          if [ $i -gt 900 ]; then
+            echo "athena query timed out id=${id}" >&2
+            return 1
+          fi
+          sleep 2
+        done
+      }
+
+      while IFS= read -r stmt; do
+        stmt_trim=$(echo "${stmt}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+        if [ -z "${stmt_trim}" ]; then
+          continue
+        fi
+        echo "athena executing: ${stmt_trim}"
+        qid=$(athena_start "${stmt_trim}")
+        echo "athena query id=${qid}"
+        athena_wait "${qid}"
+      done < <(awk 'BEGIN{RS=";"} {print}' "${SQL_FILE}")
     else
       echo "ATHENA_OUTPUT_LOCATION not set; skipping athena execution"
     fi
