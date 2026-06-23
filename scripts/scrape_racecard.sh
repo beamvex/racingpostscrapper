@@ -154,12 +154,17 @@ if [ "${SCRAPER_EXIT}" -eq 0 ]; then
         done
       }
 
-      while IFS= read -r stmt; do
+      while IFS= read -r -d '' stmt; do
         stmt_trim=$(echo "${stmt}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
         if [ -z "${stmt_trim}" ]; then
           continue
         fi
-        echo "athena executing: ${stmt_trim}"
+        first_line=$(printf "%s" "${stmt_trim}" | awk 'NR==1{print; exit}')
+        if printf "%s" "${stmt_trim}" | grep -q "external_location"; then
+          echo "athena executing: ${first_line} (has external_location)"
+        else
+          echo "athena executing: ${first_line}"
+        fi
         if ! qid=$(athena_start "${stmt_trim}"); then
           echo "athena start-query-execution failed" >&2
           exit 1
@@ -170,7 +175,7 @@ if [ "${SCRAPER_EXIT}" -eq 0 ]; then
         fi
         echo "athena query id=${qid}"
         athena_wait "${qid}"
-      done < <(awk 'BEGIN{RS=";"} {print}' "${SQL_FILE}")
+      done < <(awk 'BEGIN{RS=";"; ORS="\0"} {print}' "${SQL_FILE}")
     else
       echo "ATHENA_OUTPUT_LOCATION not set; skipping athena execution"
     fi
