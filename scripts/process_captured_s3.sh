@@ -44,20 +44,21 @@ for dir_key in ${DIRS}; do
   echo "downloading html dir s3://${BUCKET}/${dir_key} -> ${local_dir}/${html_dir_name}/"
   aws s3 cp "s3://${BUCKET}/${dir_key}" "${local_dir}/${html_dir_name}/" --recursive
 
-  json_out="${local_dir}/${html_dir_name/-time-order-full-results-html/-time-order-full-results.json}"
-  json_name=$(basename "${json_out}")
+  parquet_name="full-results-runners.parquet"
 
   IFS='/' read -r y m d rest <<< "${rel_dir}"
   if [ -z "${y}" ] || [ -z "${m}" ] || [ -z "${d}" ]; then
     echo "could not infer y/m/d from rel_dir=${rel_dir}, uploading to ${PROCESSED_PREFIX}/${rel_dir}/" >&2
-    processed_key="${PROCESSED_PREFIX}/${rel_dir}/${json_name}"
+    processed_key="${PROCESSED_PREFIX}/${rel_dir}/${parquet_name}"
+    parquet_out="${local_dir}/${parquet_name}"
   else
-    processed_key="${PROCESSED_PREFIX}/year=${y}/month=${m}/day=${d}/${json_name}"
+    processed_key="${PROCESSED_PREFIX}/year=${y}/month=${m}/day=${d}/${parquet_name}"
+    parquet_out="${local_dir}/year=${y}/month=${m}/day=${d}/${parquet_name}"
   fi
 
   echo "parsing ${local_dir}/${html_dir_name}"
   /app/target/release/full_result_html_dir_parser --html-dir "${local_dir}/${html_dir_name}" --out-dir "${local_dir}"
 
-  echo "uploading ${json_out} -> s3://${BUCKET}/${processed_key}"
-  aws s3 cp "${json_out}" "s3://${BUCKET}/${processed_key}"
+  echo "uploading ${parquet_out} -> s3://${BUCKET}/${processed_key}"
+  aws s3 cp "${parquet_out}" "s3://${BUCKET}/${processed_key}"
 done
