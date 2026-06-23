@@ -8,18 +8,18 @@ resource "aws_glue_catalog_table" "processed_full_results" {
   table_type    = "EXTERNAL_TABLE"
 
   parameters = {
-    classification = "json"
+    classification = "parquet"
     EXTERNAL       = "TRUE"
   }
 
   storage_descriptor {
     location      = "s3://${aws_s3_bucket.scraper_data.bucket}/processed/"
-    input_format  = "org.apache.hadoop.mapred.TextInputFormat"
-    output_format = "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat"
+    input_format  = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat"
+    output_format = "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat"
 
     ser_de_info {
-      name                  = "json"
-      serialization_library = "org.openx.data.jsonserde.JsonSerDe"
+      name                  = "parquet"
+      serialization_library = "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"
     }
 
     columns {
