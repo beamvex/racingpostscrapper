@@ -243,6 +243,16 @@ fn build_athena_history_sql_for_day(
         )
     };
 
+    let db_location = if history_s3_prefix.trim().is_empty() {
+        "".to_string()
+    } else {
+        format!(
+            "{}/{}/",
+            history_s3_prefix.trim_end_matches('/'),
+            history_db
+        )
+    };
+
     let table_name = format!("history_{}_{}_{}", year, month, day);
 
     if external_location.is_empty() {
@@ -252,7 +262,7 @@ fn build_athena_history_sql_for_day(
     }
 
     format!(
-        "CREATE DATABASE IF NOT EXISTS {history_db};\n\nDROP TABLE IF EXISTS {history_db}.{table_name};\n\nCREATE TABLE {history_db}.{table_name}\nWITH (\n  format = 'PARQUET',\n  parquet_compression = 'SNAPPY',\n  external_location = '{external_location}'\n) AS\nSELECT\n  r.*\nFROM {db}.{results_table} r\nWHERE {where_clause}\n;\n"
+        "CREATE DATABASE IF NOT EXISTS {history_db} LOCATION '{db_location}';\n\nDROP TABLE IF EXISTS {history_db}.{table_name};\n\nCREATE TABLE {history_db}.{table_name}\nWITH (\n  format = 'PARQUET',\n  parquet_compression = 'SNAPPY',\n  external_location = '{external_location}'\n) AS\nSELECT\n  r.*\nFROM {db}.{results_table} r\nWHERE {where_clause}\n;\n"
     )
 }
 
