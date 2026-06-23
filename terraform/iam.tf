@@ -160,10 +160,12 @@ data "aws_iam_policy_document" "ecs_task_athena" {
 
     actions = [
       "glue:CreateDatabase",
+      "glue:CreateTable",
       "glue:GetDatabase",
       "glue:GetDatabases",
       "glue:GetTable",
       "glue:GetTables",
+      "glue:UpdateTable",
       "glue:GetPartition",
       "glue:GetPartitions"
     ]
