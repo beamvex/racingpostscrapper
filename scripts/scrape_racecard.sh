@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 export DISPLAY=:99
 
 echo "starting Xvfb on ${DISPLAY}"
@@ -159,7 +160,14 @@ if [ "${SCRAPER_EXIT}" -eq 0 ]; then
           continue
         fi
         echo "athena executing: ${stmt_trim}"
-        qid=$(athena_start "${stmt_trim}")
+        if ! qid=$(athena_start "${stmt_trim}"); then
+          echo "athena start-query-execution failed" >&2
+          exit 1
+        fi
+        if [ -z "${qid}" ]; then
+          echo "athena start-query-execution returned empty QueryExecutionId" >&2
+          exit 1
+        fi
         echo "athena query id=${qid}"
         athena_wait "${qid}"
       done < <(awk 'BEGIN{RS=";"} {print}' "${SQL_FILE}")
