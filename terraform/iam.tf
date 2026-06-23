@@ -159,6 +159,7 @@ data "aws_iam_policy_document" "ecs_task_athena" {
     effect = "Allow"
 
     actions = [
+      "glue:CreateDatabase",
       "glue:GetDatabase",
       "glue:GetDatabases",
       "glue:GetTable",
