@@ -31,7 +31,8 @@ data "aws_iam_policy_document" "ecs_task_s3" {
     effect = "Allow"
 
     actions = [
-      "s3:ListBucket"
+      "s3:ListBucket",
+      "s3:GetBucketLocation"
     ]
 
     resources = [
@@ -43,7 +44,8 @@ data "aws_iam_policy_document" "ecs_task_s3" {
     effect = "Allow"
 
     actions = [
-      "s3:ListBucket"
+      "s3:ListBucket",
+      "s3:GetBucketLocation"
     ]
 
     resources = [
