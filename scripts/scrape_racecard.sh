@@ -40,12 +40,12 @@ until curl -fsS "http://127.0.0.1:9222/json/version" >/dev/null 2>&1; do
 done
 
 echo "running scraper"
-if [ -n "$1" ]; then
-  echo "date arg=$1"
-  RESULTS_DATE_USED="$1"
-  /app/target/release/racecards_time_order_scraper "$1"
+if [ -n "${1:-}" ]; then
+  echo "date arg=${1}"
+  RESULTS_DATE_USED="${1}"
+  /app/target/release/racecards_time_order_scraper "${1}"
 else
-  if [ -n "${RESULTS_DATE}" ]; then
+  if [ -n "${RESULTS_DATE:-}" ]; then
     echo "RESULTS_DATE=${RESULTS_DATE}"
     RESULTS_DATE_USED="${RESULTS_DATE}"
   else
