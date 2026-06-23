@@ -163,7 +163,7 @@ if [ "${SCRAPER_EXIT}" -eq 0 ]; then
         if printf "%s" "${stmt_trim}" | grep -q "external_location"; then
           echo "athena executing: ${first_line} (has external_location)"
 
-          if [ "${ATHENA_CLEAN_EXTERNAL_LOCATION:-}" = "1" ]; then
+          if [ "${ATHENA_CLEAN_EXTERNAL_LOCATION:-1}" = "1" ]; then
             external_loc=$(printf "%s" "${stmt_trim}" | sed -n "s/.*external_location[[:space:]]*=[[:space:]]*'\([^']*\)'.*/\1/p")
             if [ -n "${external_loc}" ]; then
               echo "cleaning external_location prefix before CTAS: ${external_loc}"

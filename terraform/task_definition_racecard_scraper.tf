@@ -37,6 +37,10 @@ resource "aws_ecs_task_definition" "racecard_scraper" {
         {
           name  = "ATHENA_OUTPUT_LOCATION"
           value = "s3://${aws_s3_bucket.scraper_data.bucket}/athena/results/"
+        },
+        {
+          name  = "ATHENA_CLEAN_EXTERNAL_LOCATION"
+          value = "1"
         }
       ]
 
