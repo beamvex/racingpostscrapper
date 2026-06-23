@@ -59,4 +59,45 @@ SCRAPER_EXIT=$?
 kill ${CHROMIUM_PID} >/dev/null 2>&1 || true
 kill ${XVFB_PID} >/dev/null 2>&1 || true
 
+if [ "${SCRAPER_EXIT}" -eq 0 ]; then
+  Y="${RESULTS_DATE_USED%%-*}"
+  REST="${RESULTS_DATE_USED#*-}"
+  M="${REST%%-*}"
+  D="${REST#*-}"
+  OUT_DIR="/data/${Y}/${M}/${D}"
+  HTML_DIR="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-racecards-html"
+  RUNNERS_OUT="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-runners.jsonl"
+
+  echo "running racecard html parser"
+  /app/target/release/racecard_html_dir_parser --html-dir "${HTML_DIR}" --out "${RUNNERS_OUT}"
+
+  SQL_FILE="${OUT_DIR}/racingpost-racecards-${Y}-${M}-${D}-history.sql"
+  if [ -f "${SQL_FILE}" ]; then
+    echo "generated sql file ${SQL_FILE}"
+    if [ -n "${ATHENA_OUTPUT_LOCATION:-}" ]; then
+      echo "running athena query"
+      AWS_REGION_USED="${AWS_REGION:-eu-west-2}"
+      AWS_PROFILE_USED="${AWS_PROFILE:-}"
+      if [ -n "${AWS_PROFILE_USED}" ]; then
+        aws athena start-query-execution \
+          --region "${AWS_REGION_USED}" \
+          --profile "${AWS_PROFILE_USED}" \
+          --query-string "$(cat "${SQL_FILE}")" \
+          --query-execution-context Database=racingpost \
+          --result-configuration "OutputLocation=${ATHENA_OUTPUT_LOCATION}"
+      else
+        aws athena start-query-execution \
+          --region "${AWS_REGION_USED}" \
+          --query-string "$(cat "${SQL_FILE}")" \
+          --query-execution-context Database=racingpost \
+          --result-configuration "OutputLocation=${ATHENA_OUTPUT_LOCATION}"
+      fi
+    else
+      echo "ATHENA_OUTPUT_LOCATION not set; skipping athena execution"
+    fi
+  else
+    echo "sql file not found at ${SQL_FILE}"
+  fi
+fi
+
 exit ${SCRAPER_EXIT}
