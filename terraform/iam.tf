@@ -135,6 +135,46 @@ resource "aws_iam_role_policy" "ecs_task_ecs" {
   policy = data.aws_iam_policy_document.ecs_task_ecs.json
 }
 
+data "aws_caller_identity" "current" {}
+
+data "aws_iam_policy_document" "ecs_task_athena" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "athena:StartQueryExecution",
+      "athena:GetQueryExecution",
+      "athena:GetQueryResults",
+      "athena:GetWorkGroup"
+    ]
+
+    resources = [
+      "arn:aws:athena:eu-west-2:${data.aws_caller_identity.current.account_id}:workgroup/primary"
+    ]
+  }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "glue:GetDatabase",
+      "glue:GetDatabases",
+      "glue:GetTable",
+      "glue:GetTables",
+      "glue:GetPartition",
+      "glue:GetPartitions"
+    ]
+
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "ecs_task_athena" {
+  name   = "racingpost-scraper-athena"
+  role   = aws_iam_role.ecs_task.id
+  policy = data.aws_iam_policy_document.ecs_task_athena.json
+}
+
 data "aws_iam_policy_document" "eventbridge_assume_role" {
   statement {
     effect = "Allow"
