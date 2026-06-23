@@ -5,6 +5,7 @@ use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
+use parquet::file::properties::WriterVersion;
 use racingpost_scraper::full_result_parse;
 use serde_json::Value;
 use std::sync::Arc;
@@ -240,6 +241,8 @@ fn write_parquet(out_path: &str, rows: &[Row]) -> anyhow::Result<()> {
     let file = std::fs::File::create(out_path).with_context(|| format!("create {out_path}"))?;
     let props = WriterProperties::builder()
         .set_compression(Compression::SNAPPY)
+        .set_dictionary_enabled(false)
+        .set_writer_version(WriterVersion::PARQUET_1_0)
         .build();
     let mut writer = ArrowWriter::try_new(file, schema, Some(props))
         .with_context(|| "create parquet writer")?;
