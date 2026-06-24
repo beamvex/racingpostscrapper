@@ -72,6 +72,21 @@ if [ "${SCRAPER_EXIT}" -eq 0 ]; then
   echo "running racecard html parser"
   /app/target/release/racecard_html_dir_parser --html-dir "${HTML_DIR}" --out "${RUNNERS_OUT}"
 
+  if [ -n "${SCRAPER_DATA_BUCKET_NAME:-}" ] && [ -f "${RUNNERS_OUT}" ]; then
+    S3_RACECARDS_PREFIX="s3://${SCRAPER_DATA_BUCKET_NAME}/racecards/${Y}/${M}/${D}/"
+    echo "uploading racecard runners to ${S3_RACECARDS_PREFIX}"
+    AWS_REGION_USED="${AWS_REGION:-eu-west-2}"
+    AWS_PROFILE_USED="${AWS_PROFILE:-}"
+    if [ -n "${AWS_PROFILE_USED}" ]; then
+      aws s3 cp "${RUNNERS_OUT}" "${S3_RACECARDS_PREFIX}$(basename "${RUNNERS_OUT}")" \
+        --region "${AWS_REGION_USED}" \
+        --profile "${AWS_PROFILE_USED}"
+    else
+      aws s3 cp "${RUNNERS_OUT}" "${S3_RACECARDS_PREFIX}$(basename "${RUNNERS_OUT}")" \
+        --region "${AWS_REGION_USED}"
+    fi
+  fi
+
   SQL_FILE="${OUT_DIR}/racingpost-racecards-${Y}-${M}-${D}-history.sql"
   if [ -f "${SQL_FILE}" ]; then
     echo "generated sql file ${SQL_FILE}"
