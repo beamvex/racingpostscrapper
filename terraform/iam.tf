@@ -206,7 +206,8 @@ data "aws_iam_policy_document" "eventbridge_ecs_run_task" {
     ]
     resources = [
       "${aws_ecs_task_definition.scraper.arn_without_revision}:*",
-      "${aws_ecs_task_definition.processor.arn_without_revision}:*"
+      "${aws_ecs_task_definition.processor.arn_without_revision}:*",
+      "${aws_ecs_task_definition.racecard_scraper.arn_without_revision}:*"
     ]
 
     condition {
