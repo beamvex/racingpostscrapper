@@ -28,6 +28,14 @@ struct RaceKey {
     course: String,
     time: String,
     race_name: String,
+    going: String,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct HorseContextKey {
+    horse: String,
+    course: String,
+    going: String,
 }
 
 #[derive(Deserialize)]
@@ -38,6 +46,8 @@ struct RunnerRow {
     time: String,
     #[serde(default)]
     race_name: String,
+    #[serde(default)]
+    going: String,
     #[serde(default)]
     horse: String,
     #[serde(default)]
@@ -105,7 +115,8 @@ fn main() -> anyhow::Result<()> {
         anyhow::bail!("no races in the last 30 minutes or upcoming")
     }
 
-    let (horse_agg, jockey_agg, trainer_agg) = build_history_aggs(&history_dir, &races)?;
+    let (horse_agg, horse_ctx_agg, jockey_agg, trainer_agg) =
+        build_history_aggs(&history_dir, &races)?;
 
     let html = build_html_report(
         &today,
@@ -113,6 +124,7 @@ fn main() -> anyhow::Result<()> {
         &history_dir,
         &races,
         &horse_agg,
+        &horse_ctx_agg,
         &jockey_agg,
         &trainer_agg,
     );
@@ -152,6 +164,7 @@ fn build_html_report(
     history_dir: &str,
     races: &[(RaceKey, Vec<RunnerMini>)],
     horse_agg: &HashMap<String, Agg>,
+    horse_ctx_agg: &HashMap<HorseContextKey, Agg>,
     jockey_agg: &HashMap<String, Agg>,
     trainer_agg: &HashMap<String, Agg>,
 ) -> String {
@@ -191,7 +204,7 @@ fn build_html_report(
         let heading_id = format!("heading{}", idx + 1);
         let collapse_id = format!("collapse{}", idx + 1);
 
-        let odds = compute_odds_rows(runners, horse_agg, jockey_agg, trainer_agg);
+        let odds = compute_odds_rows(race, runners, horse_agg, horse_ctx_agg, jockey_agg, trainer_agg);
         let sum_prob: f64 = odds.iter().map(|o| o.prob).sum();
 
         out.push_str("<div class=\"accordion-item\">\n");
@@ -297,23 +310,48 @@ fn odds_table_html(odds: &[PredRow]) -> String {
 }
 
 fn compute_odds_rows(
+    race: &RaceKey,
     runners: &[RunnerMini],
     horse_agg: &HashMap<String, Agg>,
+    horse_ctx_agg: &HashMap<HorseContextKey, Agg>,
     jockey_agg: &HashMap<String, Agg>,
     trainer_agg: &HashMap<String, Agg>,
 ) -> Vec<PredRow> {
     let mut preds: Vec<PredRow> = Vec::new();
+
+    let ctx_course = norm_key(&race.course);
+    let ctx_going = norm_key(&race.going);
+    let ctx_weight = 0.30;
+
+    let prior_runs_horse = 10.0;
+    let prior_runs_jockey = 30.0;
+    let prior_runs_trainer = 30.0;
+
     for r in runners {
-        let h = horse_agg.get(&r.horse).copied().unwrap_or_default();
+        let h_overall = horse_agg.get(&r.horse).copied().unwrap_or_default();
+        let h_ctx = if !ctx_course.is_empty() || !ctx_going.is_empty() {
+            horse_ctx_agg
+                .get(&HorseContextKey {
+                    horse: r.horse.clone(),
+                    course: ctx_course.clone(),
+                    going: ctx_going.clone(),
+                })
+                .copied()
+                .unwrap_or_default()
+        } else {
+            Agg::default()
+        };
+
+        let h = blend_aggs(h_overall, h_ctx, ctx_weight);
         let j = jockey_agg.get(&r.jockey).copied().unwrap_or_default();
         let t = trainer_agg.get(&r.trainer).copied().unwrap_or_default();
 
-        let h_avg = h.avg_rpr().unwrap_or(0.0);
-        let j_avg = j.avg_rpr().unwrap_or(0.0);
-        let t_avg = t.avg_rpr().unwrap_or(0.0);
-        let h_wr = h.win_rate().unwrap_or(0.0);
+        let h_avg = shrink_feature(h.avg_rpr().unwrap_or(0.0), h.count as f64, prior_runs_horse);
+        let j_avg = shrink_feature(j.avg_rpr().unwrap_or(0.0), j.count as f64, prior_runs_jockey);
+        let t_avg = shrink_feature(t.avg_rpr().unwrap_or(0.0), t.count as f64, prior_runs_trainer);
+        let h_pts = shrink_feature(h.avg_points().unwrap_or(0.0), h.count as f64, prior_runs_horse);
 
-        let score = 1.0 + (0.75 * h_avg) + (0.15 * j_avg) + (0.10 * t_avg) + (20.0 * h_wr);
+        let score = 1.0 + (0.75 * h_avg) + (0.15 * j_avg) + (0.10 * t_avg) + (10.0 * h_pts);
 
         preds.push(PredRow {
             horse: r.horse.clone(),
@@ -323,9 +361,17 @@ fn compute_odds_rows(
         });
     }
 
-    softmax_preds(&mut preds, 10.0);
+    softmax_preds(&mut preds, 15.0);
     preds.sort_by(|a, b| b.prob.partial_cmp(&a.prob).unwrap_or(std::cmp::Ordering::Equal));
     preds
+}
+
+fn shrink_feature(value: f64, n: f64, prior_n: f64) -> f64 {
+    if !value.is_finite() || n <= 0.0 {
+        return 0.0;
+    }
+    let w = n / (n + prior_n.max(1.0));
+    w * value
 }
 
 fn html_escape(s: &str) -> String {
@@ -349,6 +395,7 @@ struct Agg {
     win_count: u64,
     sum_rpr: f64,
     max_rpr: f64,
+    sum_points: f64,
 }
 
 impl Agg {
@@ -358,6 +405,15 @@ impl Agg {
             if p == 1 {
                 self.win_count += 1;
             }
+
+            let pts = match p {
+                1 => 5.0,
+                2 => 3.0,
+                3 => 2.0,
+                4 => 1.0,
+                _ => 0.0,
+            };
+            self.sum_points += pts;
         }
         if let Some(x) = rpr {
             self.sum_rpr += x;
@@ -380,15 +436,27 @@ impl Agg {
         }
         Some((self.win_count as f64) / (self.count as f64))
     }
+
+    fn avg_points(&self) -> Option<f64> {
+        if self.count == 0 {
+            return None;
+        }
+        Some(self.sum_points / (self.count as f64))
+    }
 }
 
 fn build_history_aggs(
     history_dir: &str,
     races: &[(RaceKey, Vec<RunnerMini>)],
-) -> anyhow::Result<(HashMap<String, Agg>, HashMap<String, Agg>, HashMap<String, Agg>)> {
+) -> anyhow::Result<(
+    HashMap<String, Agg>,
+    HashMap<HorseContextKey, Agg>,
+    HashMap<String, Agg>,
+    HashMap<String, Agg>,
+)> {
     let files = list_parquet_files(history_dir)?;
     if files.is_empty() {
-        return Ok((HashMap::new(), HashMap::new(), HashMap::new()));
+        return Ok((HashMap::new(), HashMap::new(), HashMap::new(), HashMap::new()));
     }
 
     let mut horses = HashSet::<String>::new();
@@ -408,11 +476,21 @@ fn build_history_aggs(
         }
     }
 
+    let mut contexts = HashSet::<(String, String)>::new();
+    for (rk, _rs) in races {
+        let c = norm_key(&rk.course);
+        let g = norm_key(&rk.going);
+        if !c.is_empty() || !g.is_empty() {
+            contexts.insert((c, g));
+        }
+    }
+
     let horses_ref: HashSet<&str> = horses.iter().map(|s| s.as_str()).collect();
     let jockeys_ref: HashSet<&str> = jockeys.iter().map(|s| s.as_str()).collect();
     let trainers_ref: HashSet<&str> = trainers.iter().map(|s| s.as_str()).collect();
 
     let mut horse_agg: HashMap<String, Agg> = HashMap::new();
+    let mut horse_ctx_agg: HashMap<HorseContextKey, Agg> = HashMap::new();
     let mut jockey_agg: HashMap<String, Agg> = HashMap::new();
     let mut trainer_agg: HashMap<String, Agg> = HashMap::new();
 
@@ -422,17 +500,19 @@ fn build_history_aggs(
         for b in batches {
             update_aggs_from_batch(
                 &b,
+                &contexts,
                 &horses_ref,
                 &jockeys_ref,
                 &trainers_ref,
                 &mut horse_agg,
+                &mut horse_ctx_agg,
                 &mut jockey_agg,
                 &mut trainer_agg,
             )?;
         }
     }
 
-    Ok((horse_agg, jockey_agg, trainer_agg))
+    Ok((horse_agg, horse_ctx_agg, jockey_agg, trainer_agg))
 }
 
 fn softmax_preds(preds: &mut [impl HasScore], temperature: f64) {
@@ -479,10 +559,12 @@ impl HasScore for PredRow {
 
 fn update_aggs_from_batch(
     b: &arrow::record_batch::RecordBatch,
+    contexts: &std::collections::HashSet<(String, String)>,
     horses: &std::collections::HashSet<&str>,
     jockeys: &std::collections::HashSet<&str>,
     trainers: &std::collections::HashSet<&str>,
     horse_agg: &mut HashMap<String, Agg>,
+    horse_ctx_agg: &mut HashMap<HorseContextKey, Agg>,
     jockey_agg: &mut HashMap<String, Agg>,
     trainer_agg: &mut HashMap<String, Agg>,
 ) -> anyhow::Result<()> {
@@ -493,6 +575,8 @@ fn update_aggs_from_batch(
     let idx_trainer = schema.index_of("trainer").ok();
     let idx_rpr = schema.index_of("rpr").ok();
     let idx_pos = schema.index_of("position").ok();
+    let idx_course = schema.index_of("course").ok();
+    let idx_going = schema.index_of("going").ok();
 
     let Some(idx_horse) = idx_horse else {
         return Ok(());
@@ -516,7 +600,29 @@ fn update_aggs_from_batch(
         let rpr = idx_rpr.and_then(|i| get_f64(b.column(i), row));
         let pos = idx_pos.and_then(|i| get_i64(b.column(i), row));
 
+        let course = idx_course
+            .and_then(|i| get_string(b.column(i), row))
+            .unwrap_or_default();
+        let going = idx_going
+            .and_then(|i| get_string(b.column(i), row))
+            .unwrap_or_default();
+
+        let course_norm = norm_key(&course);
+        let going_norm = norm_key(&going);
+
         horse_agg.entry(horse.clone()).or_default().add(rpr, pos);
+
+        if !contexts.is_empty() && contexts.contains(&(course_norm.clone(), going_norm.clone())) {
+            horse_ctx_agg
+                .entry(HorseContextKey {
+                    horse: horse.clone(),
+                    course: course_norm,
+                    going: going_norm,
+                })
+                .or_default()
+                .add(rpr, pos);
+        }
+
         if !jockey.is_empty() && jockeys.contains(jockey.as_str()) {
             jockey_agg.entry(jockey).or_default().add(rpr, pos);
         }
@@ -611,6 +717,35 @@ fn read_parquet_all_batches(
         out.push(batch);
     }
     Ok(out)
+}
+
+fn blend_aggs(overall: Agg, ctx: Agg, ctx_weight: f64) -> Agg {
+    if ctx.count == 0 {
+        return overall;
+    }
+
+    let w = ctx_weight.clamp(0.0, 1.0);
+    Agg {
+        count: overall.count,
+        win_count: overall.win_count,
+        sum_rpr: (1.0 - w) * overall.sum_rpr + w * ctx.sum_rpr,
+        max_rpr: overall.max_rpr,
+        sum_points: (1.0 - w) * overall.sum_points + w * ctx.sum_points,
+    }
+}
+
+fn norm_key(s: &str) -> String {
+    let t = s.trim();
+    if t.is_empty() {
+        return String::new();
+    }
+    let mut out = String::with_capacity(t.len());
+    for c in t.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        }
+    }
+    out
 }
 
 fn time_minutes_since_midnight(s: &str) -> i32 {
@@ -708,6 +843,7 @@ fn extract_all_races_from_jsonl(s: &str) -> anyhow::Result<Vec<(RaceKey, Vec<Run
             course: derived_course,
             time: row.time,
             race_name: row.race_name,
+            going: row.going,
         };
 
         if !map.contains_key(&key) {
