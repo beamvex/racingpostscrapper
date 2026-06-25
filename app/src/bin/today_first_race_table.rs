@@ -219,7 +219,6 @@ fn build_html_report(
         out.push_str("</div>\n");
 
         out.push_str("</div>\n</div>\n</div>\n");
-        out.push_str("</div>\n");
     }
     out.push_str("</div>\n");
 
