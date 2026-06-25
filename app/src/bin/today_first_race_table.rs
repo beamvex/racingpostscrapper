@@ -1,5 +1,6 @@
 use anyhow::Context;
 use arrow::array::Array;
+use chrono::{DateTime, Duration, Utc};
 use serde::Deserialize;
 use std::fs::File;
 use std::fs;
@@ -92,8 +93,17 @@ fn main() -> anyhow::Result<()> {
     let bytes = fs::read(&in_path).with_context(|| format!("read {in_path}"))?;
     let s = String::from_utf8(bytes).context("decode input as utf-8")?;
 
-    let races = extract_all_races_from_jsonl(&s)?;
-    eprintln!("today-first-race: races={}", races.len());
+    let races_all = extract_all_races_from_jsonl(&s)?;
+    let races = filter_recent_races(races_all.clone(), 30);
+    eprintln!(
+        "today-first-race: races_total={} races_recent={}",
+        races_all.len(),
+        races.len()
+    );
+
+    if races.is_empty() {
+        anyhow::bail!("no races in the last 30 minutes or upcoming")
+    }
 
     let (horse_agg, jockey_agg, trainer_agg) = build_history_aggs(&history_dir, &races)?;
 
@@ -115,6 +125,25 @@ fn main() -> anyhow::Result<()> {
     eprintln!("today-first-race: wrote report {out_path}");
 
     Ok(())
+}
+
+fn filter_recent_races(
+    races: Vec<(RaceKey, Vec<RunnerMini>)>,
+    minutes_lookback: i64,
+) -> Vec<(RaceKey, Vec<RunnerMini>)> {
+    let cutoff = Utc::now() - Duration::minutes(minutes_lookback);
+    races
+        .into_iter()
+        .filter(|(rk, _)| {
+            if rk.time.trim().is_empty() {
+                return true;
+            }
+            match DateTime::parse_from_rfc3339(rk.time.trim()) {
+                Ok(dt) => dt.with_timezone(&Utc) > cutoff,
+                Err(_) => true,
+            }
+        })
+        .collect()
 }
 
 fn build_html_report(
@@ -182,8 +211,9 @@ fn build_html_report(
         out.push_str("\">\n");
 
         out.push_str(&html_escape(&race.course));
+        let hhmm = time_hhmm(&race.time);
         out.push_str(" — ");
-        out.push_str(&html_escape(&race.time));
+        out.push_str(&html_escape(&hhmm));
         if !race.race_name.trim().is_empty() {
             out.push_str(" — ");
             out.push_str(&html_escape(&race.race_name));
@@ -583,6 +613,31 @@ fn read_parquet_all_batches(
     Ok(out)
 }
 
+fn time_minutes_since_midnight(s: &str) -> i32 {
+    let t = s.trim();
+    let idx = match t.find('T') {
+        Some(i) => i,
+        None => return i32::MAX,
+    };
+    let rest = &t[idx + 1..];
+    let hh = rest.get(0..2).and_then(|x| x.parse::<i32>().ok());
+    let mm = rest.get(3..5).and_then(|x| x.parse::<i32>().ok());
+    match (hh, mm) {
+        (Some(h), Some(m)) if (0..24).contains(&h) && (0..60).contains(&m) => (h * 60) + m,
+        _ => i32::MAX,
+    }
+}
+
+fn time_hhmm(s: &str) -> String {
+    let t = s.trim();
+    if let Some(idx) = t.find('T') {
+        if let Some(hhmm) = t.get(idx + 1..idx + 6) {
+            return hhmm.to_string();
+        }
+    }
+    t.to_string()
+}
+
 fn derive_course_from_race_name(fallback_course: &str, race_name: &str) -> String {
     let rn = race_name.trim();
     if rn.is_empty() {
@@ -674,6 +729,12 @@ fn extract_all_races_from_jsonl(s: &str) -> anyhow::Result<Vec<(RaceKey, Vec<Run
             }
         }
     }
+
+    out.sort_by(|(a, _), (b, _)| {
+        let am = time_minutes_since_midnight(&a.time);
+        let bm = time_minutes_since_midnight(&b.time);
+        am.cmp(&bm).then_with(|| a.time.cmp(&b.time))
+    });
 
     if out.is_empty() {
         anyhow::bail!("no jsonl records found")
