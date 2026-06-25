@@ -17,8 +17,6 @@ struct RunnerMini {
 #[derive(Clone)]
 struct PredRow {
     horse: String,
-    jockey: String,
-    trainer: String,
     score: f64,
     prob: f64,
     fair_odds: f64,
@@ -53,6 +51,7 @@ fn main() -> anyhow::Result<()> {
 
     let mut in_path_arg: Option<String> = None;
     let mut history_dir_arg: Option<String> = None;
+    let mut out_path_arg: Option<String> = None;
     for a in std::env::args().skip(1) {
         if let Some(p) = a.strip_prefix("--in=") {
             in_path_arg = Some(p.to_string());
@@ -60,6 +59,10 @@ fn main() -> anyhow::Result<()> {
         }
         if let Some(p) = a.strip_prefix("--history-dir=") {
             history_dir_arg = Some(p.to_string());
+            continue;
+        }
+        if let Some(p) = a.strip_prefix("--out=") {
+            out_path_arg = Some(p.to_string());
             continue;
         }
     }
@@ -78,6 +81,13 @@ fn main() -> anyhow::Result<()> {
     let history_dir = history_dir_arg
         .unwrap_or_else(|| format!("/data/athena/history/{}/{}/{}/", y, m, d));
 
+    let out_path = out_path_arg.unwrap_or_else(|| {
+        format!(
+            "/data/racecards/{}/{}/{}/racecard-report-{}.html",
+            y, m, d, today
+        )
+    });
+
     eprintln!("today-first-race: reading {in_path}");
     let bytes = fs::read(&in_path).with_context(|| format!("read {in_path}"))?;
     let s = String::from_utf8(bytes).context("decode input as utf-8")?;
@@ -85,29 +95,223 @@ fn main() -> anyhow::Result<()> {
     let races = extract_all_races_from_jsonl(&s)?;
     eprintln!("today-first-race: races={}", races.len());
 
-    println!();
-    println!("history parquet preview:");
-    preview_history_parquet_dir(&history_dir, 10)?;
-
     let (horse_agg, jockey_agg, trainer_agg) = build_history_aggs(&history_dir, &races)?;
 
-    for (race, runners) in races {
-        println!();
-        println!(
-            "race: course='{}' time='{}' race_name='{}' runners={}",
-            race.course,
-            race.time,
-            race.race_name,
-            runners.len()
-        );
-        print_table(&runners);
+    let html = build_html_report(
+        &today,
+        &in_path,
+        &history_dir,
+        &races,
+        &horse_agg,
+        &jockey_agg,
+        &trainer_agg,
+    );
 
-        println!();
-        println!("odds (heuristic, from history parquet):");
-        predict_odds_for_runners(&runners, &horse_agg, &jockey_agg, &trainer_agg);
+    if let Some(parent) = Path::new(&out_path).parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create_dir_all {}", parent.display()))?;
     }
+    fs::write(&out_path, html).with_context(|| format!("write {out_path}"))?;
+    eprintln!("today-first-race: wrote report {out_path}");
 
     Ok(())
+}
+
+fn build_html_report(
+    day: &str,
+    in_path: &str,
+    history_dir: &str,
+    races: &[(RaceKey, Vec<RunnerMini>)],
+    horse_agg: &HashMap<String, Agg>,
+    jockey_agg: &HashMap<String, Agg>,
+    trainer_agg: &HashMap<String, Agg>,
+) -> String {
+    let mut out = String::new();
+
+    out.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n");
+    out.push_str("<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
+    out.push_str("<link href=\"https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css\" rel=\"stylesheet\" integrity=\"sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH\" crossorigin=\"anonymous\">\n");
+    out.push_str("<title>");
+    out.push_str(&html_escape(day));
+    out.push_str(" Racecard Report</title>\n");
+    out.push_str("</head>\n<body>\n");
+    out.push_str("<div class=\"container my-4\">\n");
+
+    out.push_str("<div class=\"d-flex justify-content-between align-items-end\">\n");
+    out.push_str("<div>\n");
+    out.push_str("<h1 class=\"h3 mb-1\">Racecard Report</h1>\n");
+    out.push_str("<div class=\"text-muted\">Date: ");
+    out.push_str(&html_escape(day));
+    out.push_str("</div>\n");
+    out.push_str("</div>\n");
+    out.push_str("</div>\n");
+
+    out.push_str("<hr class=\"my-3\">\n");
+    out.push_str("<div class=\"small text-muted\">\n");
+    out.push_str("<div><strong>Racecard JSONL:</strong> ");
+    out.push_str(&html_escape(in_path));
+    out.push_str("</div>\n");
+    out.push_str("<div><strong>History dir:</strong> ");
+    out.push_str(&html_escape(history_dir));
+    out.push_str("</div>\n");
+    out.push_str("</div>\n");
+
+    out.push_str("<div class=\"accordion my-4\" id=\"racesAccordion\">\n");
+    for (idx, (race, runners)) in races.iter().enumerate() {
+        let race_id = format!("race{}", idx + 1);
+        let heading_id = format!("heading{}", idx + 1);
+        let collapse_id = format!("collapse{}", idx + 1);
+
+        let odds = compute_odds_rows(runners, horse_agg, jockey_agg, trainer_agg);
+        let sum_prob: f64 = odds.iter().map(|o| o.prob).sum();
+
+        out.push_str("<div class=\"accordion-item\">\n");
+        out.push_str("<h2 class=\"accordion-header\" id=\"");
+        out.push_str(&heading_id);
+        out.push_str("\">\n");
+        out.push_str("<button class=\"accordion-button");
+        if idx != 0 {
+            out.push_str(" collapsed");
+        }
+        out.push_str("\" type=\"button\" data-bs-toggle=\"collapse\" data-bs-target=\"#");
+        out.push_str(&collapse_id);
+        out.push_str("\" aria-expanded=\"");
+        out.push_str(if idx == 0 { "true" } else { "false" });
+        out.push_str("\" aria-controls=\"");
+        out.push_str(&collapse_id);
+        out.push_str("\">\n");
+
+        out.push_str(&html_escape(&race.course));
+        out.push_str(" — ");
+        out.push_str(&html_escape(&race.time));
+        if !race.race_name.trim().is_empty() {
+            out.push_str(" — ");
+            out.push_str(&html_escape(&race.race_name));
+        }
+        out.push_str("</button>\n</h2>\n");
+
+        out.push_str("<div id=\"");
+        out.push_str(&collapse_id);
+        out.push_str("\" class=\"accordion-collapse collapse");
+        if idx == 0 {
+            out.push_str(" show");
+        }
+        out.push_str("\" aria-labelledby=\"");
+        out.push_str(&heading_id);
+        out.push_str("\" data-bs-parent=\"#racesAccordion\">\n");
+
+        out.push_str("<div class=\"accordion-body\">\n");
+
+        out.push_str("<div class=\"row g-4\">\n");
+        out.push_str("<div class=\"col-12 col-lg-7\">\n");
+        out.push_str("<h3 class=\"h6\">Runners</h3>\n");
+        out.push_str(&runners_table_html(runners, &race_id));
+        out.push_str("</div>\n");
+
+        out.push_str("<div class=\"col-12 col-lg-5\">\n");
+        out.push_str("<div class=\"d-flex justify-content-between align-items-baseline\">\n");
+        out.push_str("<h3 class=\"h6 mb-0\">Fair odds (heuristic)</h3>\n");
+        out.push_str("<div class=\"text-muted small\">sum prob: ");
+        out.push_str(&format!("{:.2}%", sum_prob * 100.0));
+        out.push_str("</div>\n</div>\n");
+        out.push_str(&odds_table_html(&odds));
+        out.push_str("</div>\n");
+        out.push_str("</div>\n");
+
+        out.push_str("</div>\n</div>\n</div>\n");
+        out.push_str("</div>\n");
+    }
+    out.push_str("</div>\n");
+
+    out.push_str("</div>\n");
+    out.push_str("<script src=\"https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js\" integrity=\"sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz\" crossorigin=\"anonymous\"></script>\n");
+    out.push_str("</body>\n</html>\n");
+
+    out
+}
+
+fn runners_table_html(runners: &[RunnerMini], table_id: &str) -> String {
+    let mut out = String::new();
+    out.push_str("<div class=\"table-responsive\">\n");
+    out.push_str("<table class=\"table table-sm table-striped align-middle\" id=\"");
+    out.push_str(&html_escape(table_id));
+    out.push_str("\">\n<thead><tr><th>Horse</th><th>Jockey</th><th>Trainer</th></tr></thead>\n<tbody>\n");
+    for r in runners {
+        out.push_str("<tr><td>");
+        out.push_str(&html_escape(&r.horse));
+        out.push_str("</td><td>");
+        out.push_str(&html_escape(&r.jockey));
+        out.push_str("</td><td>");
+        out.push_str(&html_escape(&r.trainer));
+        out.push_str("</td></tr>\n");
+    }
+    out.push_str("</tbody></table></div>\n");
+    out
+}
+
+fn odds_table_html(odds: &[PredRow]) -> String {
+    let mut out = String::new();
+    out.push_str("<div class=\"table-responsive\">\n");
+    out.push_str("<table class=\"table table-sm table-hover align-middle\">\n");
+    out.push_str("<thead><tr><th>Horse</th><th class=\"text-end\">Prob</th><th class=\"text-end\">Fair odds</th></tr></thead>\n<tbody>\n");
+    for r in odds {
+        out.push_str("<tr><td>");
+        out.push_str(&html_escape(&r.horse));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.3}", r.prob));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.2}", r.fair_odds));
+        out.push_str("</td></tr>\n");
+    }
+    out.push_str("</tbody></table></div>\n");
+    out
+}
+
+fn compute_odds_rows(
+    runners: &[RunnerMini],
+    horse_agg: &HashMap<String, Agg>,
+    jockey_agg: &HashMap<String, Agg>,
+    trainer_agg: &HashMap<String, Agg>,
+) -> Vec<PredRow> {
+    let mut preds: Vec<PredRow> = Vec::new();
+    for r in runners {
+        let h = horse_agg.get(&r.horse).copied().unwrap_or_default();
+        let j = jockey_agg.get(&r.jockey).copied().unwrap_or_default();
+        let t = trainer_agg.get(&r.trainer).copied().unwrap_or_default();
+
+        let h_avg = h.avg_rpr().unwrap_or(0.0);
+        let j_avg = j.avg_rpr().unwrap_or(0.0);
+        let t_avg = t.avg_rpr().unwrap_or(0.0);
+        let h_wr = h.win_rate().unwrap_or(0.0);
+
+        let score = 1.0 + (0.75 * h_avg) + (0.15 * j_avg) + (0.10 * t_avg) + (20.0 * h_wr);
+
+        preds.push(PredRow {
+            horse: r.horse.clone(),
+            score,
+            prob: 0.0,
+            fair_odds: 0.0,
+        });
+    }
+
+    softmax_preds(&mut preds, 10.0);
+    preds.sort_by(|a, b| b.prob.partial_cmp(&a.prob).unwrap_or(std::cmp::Ordering::Equal));
+    preds
+}
+
+fn html_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 16);
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
 }
 
 #[derive(Default, Clone, Copy)]
@@ -200,80 +404,6 @@ fn build_history_aggs(
     }
 
     Ok((horse_agg, jockey_agg, trainer_agg))
-}
-
-fn predict_odds_for_runners(
-    runners: &[RunnerMini],
-    horse_agg: &HashMap<String, Agg>,
-    jockey_agg: &HashMap<String, Agg>,
-    trainer_agg: &HashMap<String, Agg>,
-) {
-    let mut preds: Vec<PredRow> = Vec::new();
-    for r in runners {
-        let h = horse_agg.get(&r.horse).copied().unwrap_or_default();
-        let j = jockey_agg.get(&r.jockey).copied().unwrap_or_default();
-        let t = trainer_agg.get(&r.trainer).copied().unwrap_or_default();
-
-        let h_avg = h.avg_rpr().unwrap_or(0.0);
-        let j_avg = j.avg_rpr().unwrap_or(0.0);
-        let t_avg = t.avg_rpr().unwrap_or(0.0);
-        let h_wr = h.win_rate().unwrap_or(0.0);
-
-        let score = 1.0 + (0.75 * h_avg) + (0.15 * j_avg) + (0.10 * t_avg) + (20.0 * h_wr);
-
-        preds.push(PredRow {
-            horse: r.horse.clone(),
-            jockey: r.jockey.clone(),
-            trainer: r.trainer.clone(),
-            score,
-            prob: 0.0,
-            fair_odds: 0.0,
-        });
-    }
-
-    softmax_preds(&mut preds, 10.0);
-
-    let sum_prob: f64 = preds.iter().map(|p| p.prob).sum();
-
-    let mut w_h = "horse".len();
-    let mut w_p = "prob".len();
-    let mut w_o = "fair_odds".len();
-    for p in &preds {
-        w_h = w_h.max(p.horse.len());
-        w_p = w_p.max(format!("{:.3}", p.prob).len());
-        w_o = w_o.max(format!("{:.2}", p.fair_odds).len());
-    }
-
-    println!(
-        "{:<w_h$}  {:>w_p$}  {:>w_o$}",
-        "horse",
-        "prob",
-        "fair_odds",
-        w_h = w_h,
-        w_p = w_p,
-        w_o = w_o
-    );
-    println!(
-        "{}  {}  {}",
-        "-".repeat(w_h),
-        "-".repeat(w_p),
-        "-".repeat(w_o)
-    );
-
-    preds.sort_by(|a, b| b.prob.partial_cmp(&a.prob).unwrap_or(std::cmp::Ordering::Equal));
-    for p in preds {
-        println!(
-            "{:<w_h$}  {:>w_p$.3}  {:>w_o$.2}",
-            p.horse,
-            p.prob,
-            p.fair_odds,
-            w_h = w_h,
-            w_p = w_p,
-            w_o = w_o
-        );
-    }
-
-    println!("sum_prob={:.6} ({:.2}%)", sum_prob, sum_prob * 100.0);
 }
 
 fn softmax_preds(preds: &mut [impl HasScore], temperature: f64) {
@@ -454,34 +584,24 @@ fn read_parquet_all_batches(
     Ok(out)
 }
 
-fn preview_history_parquet_dir(dir: &str, max_rows: usize) -> anyhow::Result<()> {
-    let paths = list_parquet_files(dir)?;
-    if paths.is_empty() {
-        println!("(no parquet files found in {dir})");
-        return Ok(());
+fn derive_course_from_race_name(fallback_course: &str, race_name: &str) -> String {
+    let rn = race_name.trim();
+    if rn.is_empty() {
+        return fallback_course.trim().to_string();
     }
 
-    let mut printed = 0usize;
-    for p in paths {
-        if printed >= max_rows {
-            break;
+    if let Some(left) = rn.split(" Racecard").next() {
+        let left = left.trim();
+        if let Some((first, rest)) = left.split_once(' ') {
+            let first = first.trim();
+            let rest = rest.trim();
+            if first.len() == 5 && first.as_bytes().get(2) == Some(&b':') && !rest.is_empty() {
+                return rest.to_string();
+            }
         }
-        let (rows, batches) = read_parquet_first_rows(&p, max_rows - printed)
-            .with_context(|| format!("read parquet {}", p.display()))?;
-        if batches.is_empty() {
-            continue;
-        }
-        println!();
-        println!("file: {} (showing {} rows)", p.display(), rows);
-        arrow::util::pretty::print_batches(&batches).context("print parquet batches")?;
-        printed += rows;
     }
 
-    if printed == 0 {
-        println!("(no rows found in parquet files)");
-    }
-
-    Ok(())
+    fallback_course.trim().to_string()
 }
 
 fn list_parquet_files(dir: &str) -> anyhow::Result<Vec<PathBuf>> {
@@ -509,46 +629,6 @@ fn list_parquet_files(dir: &str) -> anyhow::Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-fn read_parquet_first_rows(
-    path: &Path,
-    max_rows: usize,
-) -> anyhow::Result<(usize, Vec<arrow::record_batch::RecordBatch>)> {
-    let f = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let builder = parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder::try_new(f)
-        .context("ParquetRecordBatchReaderBuilder::try_new")?;
-    let mut reader = builder
-        .with_batch_size(1024)
-        .build()
-        .context("build parquet record batch reader")?;
-
-    let mut out = Vec::<arrow::record_batch::RecordBatch>::new();
-    let mut read = 0usize;
-    while let Some(batch) = reader.next() {
-        let batch = batch.context("read record batch")?;
-        if batch.num_rows() == 0 {
-            continue;
-        }
-
-        if read >= max_rows {
-            break;
-        }
-
-        let remaining = max_rows - read;
-        let take = batch.num_rows().min(remaining);
-
-        let b = if take == batch.num_rows() {
-            batch
-        } else {
-            batch.slice(0, take)
-        };
-
-        read += b.num_rows();
-        out.push(b);
-    }
-
-    Ok((read, out))
-}
-
 fn extract_all_races_from_jsonl(s: &str) -> anyhow::Result<Vec<(RaceKey, Vec<RunnerMini>)>> {
     let mut race_order: Vec<RaceKey> = Vec::new();
     let mut map: HashMap<RaceKey, Vec<RunnerMini>> = HashMap::new();
@@ -569,8 +649,9 @@ fn extract_all_races_from_jsonl(s: &str) -> anyhow::Result<Vec<(RaceKey, Vec<Run
             continue;
         }
 
+        let derived_course = derive_course_from_race_name(&row.course, &row.race_name);
         let key = RaceKey {
-            course: row.course,
+            course: derived_course,
             time: row.time,
             race_name: row.race_name,
         };
@@ -614,44 +695,4 @@ fn is_non_runner(s: &str) -> bool {
         }
     }
     norm == "nonrunner"
-}
-
-fn print_table(rows: &[RunnerMini]) {
-    let mut w_h = "horse".len();
-    let mut w_j = "jockey".len();
-    let mut w_t = "trainer".len();
-
-    for r in rows {
-        w_h = w_h.max(r.horse.len());
-        w_j = w_j.max(r.jockey.len());
-        w_t = w_t.max(r.trainer.len());
-    }
-
-    println!(
-        "{:<w_h$}  {:<w_j$}  {:<w_t$}",
-        "horse",
-        "jockey",
-        "trainer",
-        w_h = w_h,
-        w_j = w_j,
-        w_t = w_t
-    );
-    println!(
-        "{}  {}  {}",
-        "-".repeat(w_h),
-        "-".repeat(w_j),
-        "-".repeat(w_t)
-    );
-
-    for r in rows {
-        println!(
-            "{:<w_h$}  {:<w_j$}  {:<w_t$}",
-            r.horse,
-            r.jockey,
-            r.trainer,
-            w_h = w_h,
-            w_j = w_j,
-            w_t = w_t
-        );
-    }
 }
