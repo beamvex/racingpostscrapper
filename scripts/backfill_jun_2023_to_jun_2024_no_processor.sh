@@ -48,7 +48,7 @@ PY
 }
 
 compute_date_range() {
-  python3 - <<'PY'
+  START_DATE="$START_DATE" END_DATE="$END_DATE" python3 - <<'PY'
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -167,14 +167,18 @@ main() {
   terraform -chdir="$TERRAFORM_DIR" init -input=false >/dev/null
 
   local failures=0
-  while read -r d; do
+
+  local -a dates
+  mapfile -t dates < <(compute_date_range)
+
+  for d in "${dates[@]}"; do
     echo "backfill: running date=$d"
     if ! run_task_for_date "$d"; then
       echo "backfill: FAILED date=$d" >&2
       failures=$((failures+1))
     fi
     sleep "$SLEEP_BETWEEN_DAYS_SECONDS"
-  done < <(compute_date_range)
+  done
 
   if [[ "$failures" -gt 0 ]]; then
     echo "backfill: completed with failures=$failures" >&2
