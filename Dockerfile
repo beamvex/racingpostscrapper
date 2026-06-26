@@ -47,6 +47,9 @@ RUN chmod +x /app/trigger_processor_months.sh
 COPY ./scripts/backfill_last_2_years.sh /app/backfill_last_2_years.sh
 RUN chmod +x /app/backfill_last_2_years.sh
 
+COPY ./scripts/backfill_jun_2023_to_jun_2024_no_processor.sh /app/backfill_jun_2023_to_jun_2024_no_processor.sh
+RUN chmod +x /app/backfill_jun_2023_to_jun_2024_no_processor.sh
+
 COPY ./scripts/scrape_racecard.sh /app/scrape_racecard.sh
 RUN chmod +x /app/scrape_racecard.sh
 
