@@ -23,6 +23,30 @@ struct PredRow {
     fair_odds: f64,
 }
 
+#[derive(Clone)]
+struct PredExplainRow {
+    horse: String,
+    score: f64,
+    prob: f64,
+    fair_odds: f64,
+    h_count_overall: u64,
+    h_count_ctx: u64,
+    h_avg_rpr_raw: f64,
+    h_avg_rpr_shrunk: f64,
+    h_avg_points_raw: f64,
+    h_avg_points_shrunk: f64,
+    j_count: u64,
+    j_avg_rpr_raw: f64,
+    j_avg_rpr_shrunk: f64,
+    t_count: u64,
+    t_avg_rpr_raw: f64,
+    t_avg_rpr_shrunk: f64,
+    ctx_weight: f64,
+    prior_runs_horse: f64,
+    prior_runs_jockey: f64,
+    prior_runs_trainer: f64,
+}
+
 #[derive(Default, Clone, PartialEq, Eq, Hash)]
 struct RaceKey {
     course: String,
@@ -136,6 +160,24 @@ fn main() -> anyhow::Result<()> {
     fs::write(&out_path, html).with_context(|| format!("write {out_path}"))?;
     eprintln!("today-first-race: wrote report {out_path}");
 
+    if let Some(parent) = Path::new(&out_path).parent() {
+        for (idx, (race, runners)) in races.iter().enumerate() {
+            let odds = compute_odds_rows_explained(
+                race,
+                runners,
+                &horse_agg,
+                &horse_ctx_agg,
+                &jockey_agg,
+                &trainer_agg,
+            );
+            let details_html = build_race_details_html(&today, race, &odds);
+            let details_path = parent.join(race_details_filename(idx, race));
+            fs::write(&details_path, details_html)
+                .with_context(|| format!("write {}", details_path.display()))?;
+        }
+        eprintln!("today-first-race: wrote race detail pages");
+    }
+
     Ok(())
 }
 
@@ -223,15 +265,19 @@ fn build_html_report(
         out.push_str(&collapse_id);
         out.push_str("\">\n");
 
-        out.push_str(&html_escape(&race.course));
         let hhmm = time_hhmm(&race.time);
-        out.push_str(" — ");
         out.push_str(&html_escape(&hhmm));
+        out.push_str(" — ");
+        out.push_str(&html_escape(&race.course));
         if !race.race_name.trim().is_empty() {
             out.push_str(" — ");
             out.push_str(&html_escape(&race.race_name));
         }
         out.push_str("</button>\n</h2>\n");
+
+        out.push_str("<div class=\"px-3 pb-2\"><a class=\"small\" href=\"");
+        out.push_str(&html_escape(&race_details_filename(idx, race)));
+        out.push_str("\">How the score was calculated</a></div>\n");
 
         out.push_str("<div id=\"");
         out.push_str(&collapse_id);
@@ -317,7 +363,26 @@ fn compute_odds_rows(
     jockey_agg: &HashMap<String, Agg>,
     trainer_agg: &HashMap<String, Agg>,
 ) -> Vec<PredRow> {
-    let mut preds: Vec<PredRow> = Vec::new();
+    compute_odds_rows_explained(race, runners, horse_agg, horse_ctx_agg, jockey_agg, trainer_agg)
+        .into_iter()
+        .map(|x| PredRow {
+            horse: x.horse,
+            score: x.score,
+            prob: x.prob,
+            fair_odds: x.fair_odds,
+        })
+        .collect()
+}
+
+fn compute_odds_rows_explained(
+    race: &RaceKey,
+    runners: &[RunnerMini],
+    horse_agg: &HashMap<String, Agg>,
+    horse_ctx_agg: &HashMap<HorseContextKey, Agg>,
+    jockey_agg: &HashMap<String, Agg>,
+    trainer_agg: &HashMap<String, Agg>,
+) -> Vec<PredExplainRow> {
+    let mut preds: Vec<PredExplainRow> = Vec::new();
 
     let ctx_course = norm_key(&race.course);
     let ctx_going = norm_key(&race.going);
@@ -346,24 +411,185 @@ fn compute_odds_rows(
         let j = jockey_agg.get(&r.jockey).copied().unwrap_or_default();
         let t = trainer_agg.get(&r.trainer).copied().unwrap_or_default();
 
-        let h_avg = shrink_feature(h.avg_rpr().unwrap_or(0.0), h.count as f64, prior_runs_horse);
-        let j_avg = shrink_feature(j.avg_rpr().unwrap_or(0.0), j.count as f64, prior_runs_jockey);
-        let t_avg = shrink_feature(t.avg_rpr().unwrap_or(0.0), t.count as f64, prior_runs_trainer);
-        let h_pts = shrink_feature(h.avg_points().unwrap_or(0.0), h.count as f64, prior_runs_horse);
+        let h_avg_raw = h.avg_rpr().unwrap_or(0.0);
+        let j_avg_raw = j.avg_rpr().unwrap_or(0.0);
+        let t_avg_raw = t.avg_rpr().unwrap_or(0.0);
+        let h_pts_raw = h.avg_points().unwrap_or(0.0);
+
+        let h_avg = shrink_feature(h_avg_raw, h.count as f64, prior_runs_horse);
+        let j_avg = shrink_feature(j_avg_raw, j.count as f64, prior_runs_jockey);
+        let t_avg = shrink_feature(t_avg_raw, t.count as f64, prior_runs_trainer);
+        let h_pts = shrink_feature(h_pts_raw, h.count as f64, prior_runs_horse);
 
         let score = 1.0 + (0.75 * h_avg) + (0.15 * j_avg) + (0.10 * t_avg) + (10.0 * h_pts);
 
-        preds.push(PredRow {
+        preds.push(PredExplainRow {
             horse: r.horse.clone(),
             score,
             prob: 0.0,
             fair_odds: 0.0,
+            h_count_overall: h_overall.count,
+            h_count_ctx: h_ctx.count,
+            h_avg_rpr_raw: h_avg_raw,
+            h_avg_rpr_shrunk: h_avg,
+            h_avg_points_raw: h_pts_raw,
+            h_avg_points_shrunk: h_pts,
+            j_count: j.count,
+            j_avg_rpr_raw: j_avg_raw,
+            j_avg_rpr_shrunk: j_avg,
+            t_count: t.count,
+            t_avg_rpr_raw: t_avg_raw,
+            t_avg_rpr_shrunk: t_avg,
+            ctx_weight,
+            prior_runs_horse,
+            prior_runs_jockey,
+            prior_runs_trainer,
         });
     }
 
     softmax_preds(&mut preds, 15.0);
     preds.sort_by(|a, b| b.prob.partial_cmp(&a.prob).unwrap_or(std::cmp::Ordering::Equal));
     preds
+}
+
+fn build_race_details_html(day: &str, race: &RaceKey, odds: &[PredExplainRow]) -> String {
+    let mut out = String::new();
+    out.push_str("<!doctype html>\n<html lang=\"en\">\n<head>\n");
+    out.push_str("<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
+    out.push_str("<link href=\"https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css\" rel=\"stylesheet\" integrity=\"sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH\" crossorigin=\"anonymous\">\n");
+    out.push_str("<title>");
+    out.push_str(&html_escape(day));
+    out.push_str(" — ");
+    out.push_str(&html_escape(&race.course));
+    out.push_str(" ");
+    out.push_str(&html_escape(&time_hhmm(&race.time)));
+    out.push_str("</title>\n</head>\n<body class=\"container py-4\">\n");
+
+    out.push_str("<div class=\"mb-3\"><a href=\"racecard-report-");
+    out.push_str(&html_escape(day));
+    out.push_str(".html\">Back to report</a></div>\n");
+
+    out.push_str("<h1 class=\"h4\">");
+    out.push_str(&html_escape(&race.course));
+    out.push_str(" — ");
+    out.push_str(&html_escape(&time_hhmm(&race.time)));
+    if !race.going.trim().is_empty() {
+        out.push_str(" <span class=\"text-muted\">(");
+        out.push_str(&html_escape(&race.going));
+        out.push_str(")</span>");
+    }
+    out.push_str("</h1>\n");
+    if !race.race_name.trim().is_empty() {
+        out.push_str("<div class=\"text-muted mb-3\">");
+        out.push_str(&html_escape(&race.race_name));
+        out.push_str("</div>\n");
+    }
+
+    out.push_str("<div class=\"table-responsive\">\n<table class=\"table table-sm table-striped align-middle\">\n");
+    out.push_str("<thead><tr>");
+    out.push_str("<th>Horse</th>");
+    out.push_str("<th class=\"text-end\">Score</th>");
+    out.push_str("<th class=\"text-end\">Prob</th>");
+    out.push_str("<th class=\"text-end\">Fair odds</th>");
+    out.push_str("<th class=\"text-end\">Horse runs (overall)</th>");
+    out.push_str("<th class=\"text-end\">Horse runs (course+going)</th>");
+    out.push_str("<th class=\"text-end\">Horse avg RPR (raw)</th>");
+    out.push_str("<th class=\"text-end\">Horse avg RPR (shrunk)</th>");
+    out.push_str("<th class=\"text-end\">Horse avg points (raw)</th>");
+    out.push_str("<th class=\"text-end\">Horse avg points (shrunk)</th>");
+    out.push_str("<th class=\"text-end\">Jockey runs</th>");
+    out.push_str("<th class=\"text-end\">Jockey avg RPR (raw)</th>");
+    out.push_str("<th class=\"text-end\">Jockey avg RPR (shrunk)</th>");
+    out.push_str("<th class=\"text-end\">Trainer runs</th>");
+    out.push_str("<th class=\"text-end\">Trainer avg RPR (raw)</th>");
+    out.push_str("<th class=\"text-end\">Trainer avg RPR (shrunk)</th>");
+    out.push_str("</tr></thead>\n<tbody>\n");
+
+    for r in odds {
+        out.push_str("<tr><td>");
+        out.push_str(&html_escape(&r.horse));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.4}", r.score));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.3}", r.prob));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.2}", r.fair_odds));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&r.h_count_overall.to_string());
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&r.h_count_ctx.to_string());
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.3}", r.h_avg_rpr_raw));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.3}", r.h_avg_rpr_shrunk));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.3}", r.h_avg_points_raw));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.3}", r.h_avg_points_shrunk));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&r.j_count.to_string());
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.3}", r.j_avg_rpr_raw));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.3}", r.j_avg_rpr_shrunk));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&r.t_count.to_string());
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.3}", r.t_avg_rpr_raw));
+        out.push_str("</td><td class=\"text-end\">");
+        out.push_str(&format!("{:.3}", r.t_avg_rpr_shrunk));
+        out.push_str("</td></tr>\n");
+    }
+
+    out.push_str("</tbody></table></div>\n");
+
+    if let Some(first) = odds.first() {
+        out.push_str("<div class=\"small text-muted mt-3\">Context blend weight: ");
+        out.push_str(&format!("{:.0}%", first.ctx_weight * 100.0));
+        out.push_str(". Shrinkage priors (runs): horse=");
+        out.push_str(&format!("{:.0}", first.prior_runs_horse));
+        out.push_str(", jockey=");
+        out.push_str(&format!("{:.0}", first.prior_runs_jockey));
+        out.push_str(", trainer=");
+        out.push_str(&format!("{:.0}", first.prior_runs_trainer));
+        out.push_str(".</div>\n");
+    }
+
+    out.push_str("<script src=\"https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js\" integrity=\"sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz\" crossorigin=\"anonymous\"></script>\n");
+    out.push_str("</body>\n</html>\n");
+    out
+}
+
+fn race_details_filename(idx: usize, race: &RaceKey) -> String {
+    let hhmm = time_hhmm(&race.time);
+    let course = slugify(&race.course);
+    format!("race-details-{:02}-{}-{}.html", idx + 1, hhmm.replace(':', ""), course)
+}
+
+fn slugify(s: &str) -> String {
+    let t = s.trim();
+    if t.is_empty() {
+        return "race".to_string();
+    }
+    let mut out = String::with_capacity(t.len());
+    let mut last_dash = false;
+    for c in t.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            last_dash = false;
+        } else if !last_dash {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    if out.is_empty() {
+        "race".to_string()
+    } else {
+        out
+    }
 }
 
 fn shrink_feature(value: f64, n: f64, prior_n: f64) -> f64 {
@@ -428,13 +654,6 @@ impl Agg {
             return None;
         }
         Some(self.sum_rpr / (self.count as f64))
-    }
-
-    fn win_rate(&self) -> Option<f64> {
-        if self.count == 0 {
-            return None;
-        }
-        Some((self.win_count as f64) / (self.count as f64))
     }
 
     fn avg_points(&self) -> Option<f64> {
@@ -548,6 +767,16 @@ trait HasScore {
 }
 
 impl HasScore for PredRow {
+    fn score(&self) -> f64 {
+        self.score
+    }
+    fn set_prob_and_odds(&mut self, prob: f64) {
+        self.prob = prob;
+        self.fair_odds = if prob > 0.0 { 1.0 / prob } else { f64::INFINITY };
+    }
+}
+
+impl HasScore for PredExplainRow {
     fn score(&self) -> f64 {
         self.score
     }
