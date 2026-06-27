@@ -114,7 +114,7 @@ PY
     return 1
   fi
 
-  echo "date=$date taskArn=$task_arn"
+  echo "date=$date taskArn=$task_arn" >&2
 
   # Print the taskArn as the function's stdout so callers can capture it.
   printf '%s\n' "$task_arn"
