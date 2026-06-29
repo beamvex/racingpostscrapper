@@ -34,6 +34,7 @@ RUN cargo build --release --bin full_result_html_dir_parser
 RUN cargo build --release --bin racecards_time_order_scraper
 RUN cargo build --release --bin racecard_html_dir_parser
 RUN cargo build --release --bin today_first_race_table
+RUN cargo build --release --bin backtest
 
 COPY ./scripts/runscript.sh /app/runscript.sh
 RUN chmod +x /app/runscript.sh
