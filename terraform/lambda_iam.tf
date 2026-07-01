@@ -15,7 +15,7 @@ data "aws_iam_policy_document" "lambda_assume_role" {
 }
 
 resource "aws_iam_role" "lambda" {
-  name               = "racingpost-probabilities-lambda"
+  name               = "racingpost-scraper-lambda"
   assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
 }
 

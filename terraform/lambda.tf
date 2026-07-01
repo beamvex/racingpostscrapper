@@ -1,5 +1,5 @@
 data "aws_iam_role" "lambda" {
-  name = "racingpost-probabilities-lambda"
+  name = "racingpost-scraper-lambda"
 }
 
 data "archive_file" "lambda_zip" {
