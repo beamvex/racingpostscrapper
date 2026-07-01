@@ -87,6 +87,48 @@ if [ "${SCRAPER_EXIT}" -eq 0 ]; then
     fi
   fi
 
+  # Download parquet files from S3 for probability computation
+  HISTORY_DIR="${OUT_DIR}/history_parquet"
+  mkdir -p "${HISTORY_DIR}"
+  if [ -n "${SCRAPER_DATA_BUCKET_NAME:-}" ]; then
+    S3_PROCESSED_PREFIX="s3://${SCRAPER_DATA_BUCKET_NAME}/processed/"
+    echo "downloading parquet files from ${S3_PROCESSED_PREFIX} to ${HISTORY_DIR}"
+    if [ -n "${AWS_PROFILE_USED}" ]; then
+      aws s3 sync "${S3_PROCESSED_PREFIX}" "${HISTORY_DIR}" \
+        --region "${AWS_REGION_USED}" \
+        --profile "${AWS_PROFILE_USED}" \
+        --exclude "*" \
+        --include "*.parquet"
+    else
+      aws s3 sync "${S3_PROCESSED_PREFIX}" "${HISTORY_DIR}" \
+        --region "${AWS_REGION_USED}" \
+        --exclude "*" \
+        --include "*.parquet"
+    fi
+  fi
+
+  # Generate probabilities HTML using today_first_race_table
+  PROBABILITIES_HTML="${OUT_DIR}/racecard-report-${RESULTS_DATE_USED}.html"
+  echo "generating probabilities HTML to ${PROBABILITIES_HTML}"
+  /app/target/release/today_first_race_table \
+    --in="${RUNNERS_OUT}" \
+    --history-dir="${HISTORY_DIR}" \
+    --out="${PROBABILITIES_HTML}"
+
+  # Upload probabilities HTML to S3 /probabilities
+  if [ -n "${SCRAPER_DATA_BUCKET_NAME:-}" ] && [ -f "${PROBABILITIES_HTML}" ]; then
+    S3_PROBABILITIES_PREFIX="s3://${SCRAPER_DATA_BUCKET_NAME}/probabilities/${Y}/${M}/${D}/"
+    echo "uploading probabilities HTML to ${S3_PROBABILITIES_PREFIX}"
+    if [ -n "${AWS_PROFILE_USED}" ]; then
+      aws s3 cp "${PROBABILITIES_HTML}" "${S3_PROBABILITIES_PREFIX}$(basename "${PROBABILITIES_HTML}")" \
+        --region "${AWS_REGION_USED}" \
+        --profile "${AWS_PROFILE_USED}"
+    else
+      aws s3 cp "${PROBABILITIES_HTML}" "${S3_PROBABILITIES_PREFIX}$(basename "${PROBABILITIES_HTML}")" \
+        --region "${AWS_REGION_USED}"
+    fi
+  fi
+
   SQL_FILE="${OUT_DIR}/racingpost-racecards-${Y}-${M}-${D}-history.sql"
   if [ -f "${SQL_FILE}" ]; then
     echo "generated sql file ${SQL_FILE}"

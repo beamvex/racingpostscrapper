@@ -80,6 +80,27 @@ data "aws_iam_policy_document" "ecs_task_s3" {
   }
 }
 
+data "aws_iam_policy_document" "ecs_task_events" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "events:PutRule",
+      "events:PutTargets",
+      "events:DeleteRule",
+      "events:RemoveTargets"
+    ]
+
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "ecs_task_events" {
+  name   = "racingpost-scraper-events"
+  role   = aws_iam_role.ecs_task.id
+  policy = data.aws_iam_policy_document.ecs_task_events.json
+}
+
 resource "aws_iam_role_policy" "ecs_task_s3" {
   name   = "racingpost-scraper-s3"
   role   = aws_iam_role.ecs_task.id

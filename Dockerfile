@@ -54,5 +54,8 @@ RUN chmod +x /app/backfill_jun_2023_to_jun_2024_no_processor.sh
 COPY ./scripts/scrape_racecard.sh /app/scrape_racecard.sh
 RUN chmod +x /app/scrape_racecard.sh
 
+COPY ./scripts/schedule_today.py /app/schedule_today.py
+RUN chmod +x /app/schedule_today.py
+
 ENTRYPOINT ["bash", "./runscript.sh"]
 
