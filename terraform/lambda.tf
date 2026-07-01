@@ -62,10 +62,3 @@ resource "aws_lambda_function" "probabilities" {
   }
 }
 
-resource "aws_lambda_permission" "alb" {
-  statement_id  = "AllowExecutionFromALB"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.probabilities.function_name
-  principal     = "elasticloadbalancing.amazonaws.com"
-  source_arn    = aws_lb_target_group.probabilities.arn
-}
