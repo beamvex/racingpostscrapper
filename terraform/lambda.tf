@@ -50,9 +50,9 @@ data "archive_file" "lambda_zip" {
 resource "aws_lambda_function" "probabilities" {
   filename         = data.archive_file.lambda_zip.output_path
   function_name    = "racingpost-probabilities"
-  role            = aws_iam_role.lambda.arn
-  handler         = "lambda_function.lambda_handler"
-  runtime         = "python3.11"
+  role             = aws_iam_role.lambda.arn
+  handler          = "lambda_function.lambda_handler"
+  runtime          = "python3.11"
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
 
   environment {
