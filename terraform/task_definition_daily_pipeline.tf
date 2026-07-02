@@ -19,10 +19,7 @@ resource "aws_ecs_task_definition" "daily_pipeline" {
       image     = "512752756525.dkr.ecr.eu-west-2.amazonaws.com/racingpost-scrapper:latest"
       essential = true
 
-      command = [
-        "bash",
-        "/app/daily_pipeline.sh"
-      ]
+      entryPoint = ["/app/daily_pipeline.sh"]
 
       environment = [
         {
