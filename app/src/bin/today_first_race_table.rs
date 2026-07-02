@@ -84,42 +84,58 @@ fn main() -> anyhow::Result<()> {
     let today = racingpost_scraper::utils::current_utc_date_yyyy_mm_dd();
     eprintln!("today-first-race: date={today}");
 
+    let mut root_arg: Option<String> = None;
     let mut in_path_arg: Option<String> = None;
     let mut history_dir_arg: Option<String> = None;
     let mut out_path_arg: Option<String> = None;
-    for a in std::env::args().skip(1) {
-        if let Some(p) = a.strip_prefix("--in=") {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut i = 0;
+    while i < args.len() {
+        let a = &args[i];
+        if let Some(p) = a.strip_prefix("--root=") {
+            root_arg = Some(p.to_string());
+        } else if a == "--root" && i + 1 < args.len() {
+            i += 1;
+            root_arg = Some(args[i].clone());
+        } else if let Some(p) = a.strip_prefix("--in=") {
             in_path_arg = Some(p.to_string());
-            continue;
-        }
-        if let Some(p) = a.strip_prefix("--history-dir=") {
+        } else if a == "--in" && i + 1 < args.len() {
+            i += 1;
+            in_path_arg = Some(args[i].clone());
+        } else if let Some(p) = a.strip_prefix("--history-dir=") {
             history_dir_arg = Some(p.to_string());
-            continue;
-        }
-        if let Some(p) = a.strip_prefix("--out=") {
+        } else if a == "--history-dir" && i + 1 < args.len() {
+            i += 1;
+            history_dir_arg = Some(args[i].clone());
+        } else if let Some(p) = a.strip_prefix("--out=") {
             out_path_arg = Some(p.to_string());
-            continue;
+        } else if a == "--out" && i + 1 < args.len() {
+            i += 1;
+            out_path_arg = Some(args[i].clone());
         }
+        i += 1;
     }
 
     let y = &today[0..4];
     let m = &today[5..7];
     let d = &today[8..10];
 
+    let root = root_arg.unwrap_or_else(|| "/data".to_string());
+
     let in_path = in_path_arg.unwrap_or_else(|| {
         format!(
-            "/data/racecards/{}/{}/{}/racingpost-racecards-{}-runners.jsonl",
-            y, m, d, today
+            "{}/racecards/{}/{}/{}/racingpost-racecards-{}-runners.jsonl",
+            root, y, m, d, today
         )
     });
 
     let history_dir = history_dir_arg
-        .unwrap_or_else(|| format!("/data/athena/history/{}/{}/{}/", y, m, d));
+        .unwrap_or_else(|| format!("{}/processed/", root));
 
     let out_path = out_path_arg.unwrap_or_else(|| {
         format!(
-            "/data/racecards/{}/{}/{}/racecard-report-{}.html",
-            y, m, d, today
+            "{}/racecards/{}/{}/{}/racecard-report-{}.html",
+            root, y, m, d, today
         )
     });
 
@@ -447,7 +463,7 @@ fn compute_odds_rows_explained(
         });
     }
 
-    softmax_preds(&mut preds, 15.0);
+    softmax_preds(&mut preds, 30.0);
     preds.sort_by(|a, b| b.prob.partial_cmp(&a.prob).unwrap_or(std::cmp::Ordering::Equal));
     preds
 }
@@ -1028,10 +1044,18 @@ fn list_parquet_files(dir: &str) -> anyhow::Result<Vec<PathBuf>> {
     if !d.exists() {
         return Ok(out);
     }
-    for ent in fs::read_dir(d).with_context(|| format!("read_dir {dir}"))? {
+    list_parquet_files_recursive(d, &mut out)?;
+    out.sort();
+    Ok(out)
+}
+
+fn list_parquet_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::Result<()> {
+    for ent in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
         let ent = ent.context("read_dir entry")?;
         let p = ent.path();
-        if p.is_file() {
+        if p.is_dir() {
+            list_parquet_files_recursive(&p, out)?;
+        } else if p.is_file() {
             let name = p
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -1043,8 +1067,7 @@ fn list_parquet_files(dir: &str) -> anyhow::Result<Vec<PathBuf>> {
             out.push(p);
         }
     }
-    out.sort();
-    Ok(out)
+    Ok(())
 }
 
 fn extract_all_races_from_jsonl(s: &str) -> anyhow::Result<Vec<(RaceKey, Vec<RunnerMini>)>> {
