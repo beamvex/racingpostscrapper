@@ -102,9 +102,35 @@ if [ -n "${SCRAPER_DATA_BUCKET_NAME:-}" ]; then
 fi
 
 # ============================================================
-# STEP 4: Scrape today's racecard
+# STEP 4: Restart Chromium (results scraper closed it)
 # ============================================================
-echo "=== step 4: scraping racecard ==="
+echo "=== restarting chromium for racecard scrape ==="
+chromium \
+  --no-sandbox \
+  --disable-dev-shm-usage \
+  --disable-gpu \
+  --disable-software-rasterizer \
+  --remote-debugging-address=0.0.0.0 \
+  --remote-debugging-port=9222 \
+  about:blank &
+CHROMIUM_PID=$!
+
+i=0
+until curl -fsS "http://127.0.0.1:9222/json/version" >/dev/null 2>&1; do
+  i=$((i+1))
+  if [ $i -gt 100 ]; then
+    echo "chromium devtools did not come up"
+    kill ${CHROMIUM_PID} >/dev/null 2>&1 || true
+    kill ${XVFB_PID} >/dev/null 2>&1 || true
+    exit 1
+  fi
+  sleep 0.1
+done
+
+# ============================================================
+# STEP 5: Scrape today's racecard
+# ============================================================
+echo "=== step 5: scraping racecard ==="
 /app/target/release/racecards_time_order_scraper "${RESULTS_DATE_USED}"
 RACECARD_EXIT=$?
 
@@ -116,30 +142,30 @@ if [ "${RACECARD_EXIT}" -ne 0 ]; then
 fi
 
 # ============================================================
-# STEP 5: Parse racecard HTML into runners JSONL
+# STEP 6: Parse racecard HTML into runners JSONL
 # ============================================================
 HTML_DIR="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-racecards-html"
 RUNNERS_OUT="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-runners.jsonl"
 
-echo "=== step 5: parsing racecard html ==="
+echo "=== step 6: parsing racecard html ==="
 /app/target/release/racecard_html_dir_parser --html-dir "${HTML_DIR}" --out "${RUNNERS_OUT}"
 
 # ============================================================
-# STEP 6: Upload runners JSONL to S3
+# STEP 7: Upload runners JSONL to S3
 # ============================================================
 if [ -n "${SCRAPER_DATA_BUCKET_NAME:-}" ] && [ -f "${RUNNERS_OUT}" ]; then
-  echo "=== step 6: uploading runners jsonl ==="
+  echo "=== step 7: uploading runners jsonl ==="
   S3_RACECARDS_PREFIX="s3://${SCRAPER_DATA_BUCKET_NAME}/racecards/${Y}/${M}/${D}/"
   aws_cp "${RUNNERS_OUT}" "${S3_RACECARDS_PREFIX}$(basename "${RUNNERS_OUT}")"
 fi
 
 # ============================================================
-# STEP 7: Download parquet files from S3
+# STEP 8: Download parquet files from S3
 # ============================================================
 HISTORY_DIR="${OUT_DIR}/history_parquet"
 mkdir -p "${HISTORY_DIR}"
 if [ -n "${SCRAPER_DATA_BUCKET_NAME:-}" ]; then
-  echo "=== step 7: downloading parquet files ==="
+  echo "=== step 8: downloading parquet files ==="
   S3_PROCESSED_PREFIX="s3://${SCRAPER_DATA_BUCKET_NAME}/processed/"
   aws_sync "${S3_PROCESSED_PREFIX}" "${HISTORY_DIR}" \
     --exclude "*" \
@@ -147,20 +173,20 @@ if [ -n "${SCRAPER_DATA_BUCKET_NAME:-}" ]; then
 fi
 
 # ============================================================
-# STEP 8: Compute probabilities and generate HTML report
+# STEP 9: Compute probabilities and generate HTML report
 # ============================================================
 PROBABILITIES_HTML="${OUT_DIR}/racecard-report-${RESULTS_DATE_USED}.html"
-echo "=== step 8: computing probabilities ==="
+echo "=== step 9: computing probabilities ==="
 /app/target/release/today_first_race_table \
   --in="${RUNNERS_OUT}" \
   --history-dir="${HISTORY_DIR}" \
   --out="${PROBABILITIES_HTML}"
 
 # ============================================================
-# STEP 9: Upload HTML report to S3
+# STEP 10: Upload HTML report to S3
 # ============================================================
 if [ -n "${SCRAPER_DATA_BUCKET_NAME:-}" ] && [ -f "${PROBABILITIES_HTML}" ]; then
-  echo "=== step 9: uploading html report ==="
+  echo "=== step 10: uploading html report ==="
   S3_PROBABILITIES_PREFIX="s3://${SCRAPER_DATA_BUCKET_NAME}/probabilities/${Y}/${M}/${D}/"
   aws_cp "${PROBABILITIES_HTML}" "${S3_PROBABILITIES_PREFIX}$(basename "${PROBABILITIES_HTML}")"
 fi
