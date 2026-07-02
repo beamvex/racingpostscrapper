@@ -57,5 +57,8 @@ RUN chmod +x /app/scrape_racecard.sh
 COPY ./scripts/schedule_today.py /app/schedule_today.py
 RUN chmod +x /app/schedule_today.py
 
+COPY ./scripts/daily_pipeline.sh /app/daily_pipeline.sh
+RUN chmod +x /app/daily_pipeline.sh
+
 ENTRYPOINT ["bash", "./runscript.sh"]
 
