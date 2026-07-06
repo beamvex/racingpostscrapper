@@ -104,7 +104,22 @@ def _put_target(
     )
 
 
-def _load_unique_race_times(jsonl_path: str) -> list[datetime]:
+def _is_uk_or_ire_course(course: str) -> bool:
+    """UK courses have no suffix or (AW); Irish have (IRE). Exclude others (e.g. French)."""
+    c = course.strip()
+    if not c:
+        return False
+    if "(IRE)" in c:
+        return True
+    if "(AW)" in c:
+        return True
+    # No country suffix = UK
+    if "(" not in c:
+        return True
+    return False
+
+
+def _load_uk_ire_race_times(jsonl_path: str) -> list[datetime]:
     seen = set()
     out: list[datetime] = []
 
@@ -117,6 +132,11 @@ def _load_unique_race_times(jsonl_path: str) -> list[datetime]:
                 obj = json.loads(line)
             except json.JSONDecodeError:
                 continue
+
+            course = (obj.get("course") or "").strip()
+            if not _is_uk_or_ire_course(course):
+                continue
+
             t = (obj.get("time") or "").strip()
             if not t:
                 continue
@@ -151,42 +171,51 @@ def main() -> None:
     subnets_csv = _env("ECS_SUBNETS")
     security_groups_csv = _env("ECS_SECURITY_GROUPS")
 
-    taskdef_racecard = _env("ECS_TASKDEF_RACECARD_ARN")
-    taskdef_results = _env("ECS_TASKDEF_RESULTS_ARN")
+    taskdef_pipeline = _env("ECS_TASKDEF_PIPELINE_ARN")
 
-    times = _load_unique_race_times(runners_jsonl)
+    times = _load_uk_ire_race_times(runners_jsonl)
     if not times:
-        raise RuntimeError(f"no race times found in {runners_jsonl}")
+        raise RuntimeError(f"no UK/IRE race times found in {runners_jsonl}")
 
+    print(f"found {len(times)} unique UK/IRE race times")
+
+    # Schedule pipeline 10 mins before each race
     for dt in times:
-        dt_pre = dt - timedelta(minutes=15)
-        dt_post = dt + timedelta(minutes=15)
-
+        dt_pre = dt - timedelta(minutes=10)
         stamp = dt.strftime("%Y%m%d-%H%M")
-        pre_rule = f"rps-racecard-pre-{stamp}"
-        post_rule = f"rps-results-post-{stamp}"
+        rule_name = f"rps-pipeline-pre-{stamp}"
 
-        _put_rule(pre_rule, _cron_expr(dt_pre))
+        _put_rule(rule_name, _cron_expr(dt_pre))
         _put_target(
-            rule_name=pre_rule,
+            rule_name=rule_name,
             target_id="ecs-run-task",
             cluster_arn=cluster_arn,
             role_arn=role_arn,
-            task_def_arn=taskdef_racecard,
+            task_def_arn=taskdef_pipeline,
             subnets_csv=subnets_csv,
             security_groups_csv=security_groups_csv,
         )
+        print(f"  scheduled pre-race  {dt_pre.strftime('%H:%M')}  for race at {dt.strftime('%H:%M')}")
 
-        _put_rule(post_rule, _cron_expr(dt_post))
-        _put_target(
-            rule_name=post_rule,
-            target_id="ecs-run-task",
-            cluster_arn=cluster_arn,
-            role_arn=role_arn,
-            task_def_arn=taskdef_results,
-            subnets_csv=subnets_csv,
-            security_groups_csv=security_groups_csv,
-        )
+    # Schedule pipeline 30 mins after the last race
+    last_dt = times[-1]
+    dt_post = last_dt + timedelta(minutes=30)
+    stamp = last_dt.strftime("%Y%m%d-%H%M")
+    rule_name = f"rps-pipeline-post-{stamp}"
+
+    _put_rule(rule_name, _cron_expr(dt_post))
+    _put_target(
+        rule_name=rule_name,
+        target_id="ecs-run-task",
+        cluster_arn=cluster_arn,
+        role_arn=role_arn,
+        task_def_arn=taskdef_pipeline,
+        subnets_csv=subnets_csv,
+        security_groups_csv=security_groups_csv,
+    )
+    print(f"  scheduled post-race {dt_post.strftime('%H:%M')}  (30 min after last race at {last_dt.strftime('%H:%M')})")
+
+    print("done")
 
 
 if __name__ == "__main__":

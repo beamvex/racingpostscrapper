@@ -60,5 +60,8 @@ RUN chmod +x /app/schedule_today.py
 COPY ./scripts/daily_pipeline.sh /app/daily_pipeline.sh
 RUN chmod +x /app/daily_pipeline.sh
 
+COPY ./scripts/run_scheduler.sh /app/run_scheduler.sh
+RUN chmod +x /app/run_scheduler.sh
+
 ENTRYPOINT ["bash", "./runscript.sh"]
 
