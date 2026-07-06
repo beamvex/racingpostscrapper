@@ -151,6 +151,21 @@ data "aws_iam_policy_document" "ecs_task_ecs" {
       values   = ["ecs-tasks.amazonaws.com"]
     }
   }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "iam:PassRole"
+    ]
+    resources = [
+      aws_iam_role.eventbridge_ecs_run_task.arn
+    ]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["events.amazonaws.com"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "ecs_task_ecs" {
@@ -229,7 +244,9 @@ data "aws_iam_policy_document" "eventbridge_ecs_run_task" {
     resources = [
       "${aws_ecs_task_definition.scraper.arn_without_revision}:*",
       "${aws_ecs_task_definition.processor.arn_without_revision}:*",
-      "${aws_ecs_task_definition.racecard_scraper.arn_without_revision}:*"
+      "${aws_ecs_task_definition.racecard_scraper.arn_without_revision}:*",
+      "${aws_ecs_task_definition.daily_pipeline.arn_without_revision}:*",
+      "${aws_ecs_task_definition.scheduler.arn_without_revision}:*"
     ]
 
     condition {
