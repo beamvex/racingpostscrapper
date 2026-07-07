@@ -31,6 +31,64 @@ def _run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
+def _run_quiet(cmd: list[str]) -> bool:
+    """Run a command, return True if it succeeded (exit 0)."""
+    result = subprocess.run(cmd, capture_output=True)
+    return result.returncode == 0
+
+
+def _rule_exists(name: str) -> bool:
+    region = os.environ.get("AWS_REGION", "eu-west-2")
+    return _run_quiet(
+        ["aws", "events", "describe-rule", "--name", name, "--region", region]
+    )
+
+
+def _list_rule_names(prefix: str) -> list[str]:
+    region = os.environ.get("AWS_REGION", "eu-west-2")
+    result = subprocess.run(
+        ["aws", "events", "list-rules", "--name-prefix", prefix, "--region", region, "--output", "json"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return []
+    return [r["Name"] for r in data.get("Rules", [])]
+
+
+def _delete_rule(name: str) -> None:
+    region = os.environ.get("AWS_REGION", "eu-west-2")
+    # Remove targets first
+    _run_quiet(
+        ["aws", "events", "remove-targets", "--rule", name, "--ids", "ecs-run-task", "--region", region]
+    )
+    _run_quiet(
+        ["aws", "events", "delete-rule", "--name", name, "--region", region]
+    )
+
+
+def _cleanup_old_rules(prefix: str, today_str: str) -> int:
+    """Delete rules with the given prefix whose names contain a date before today_str.
+    Returns the number of rules deleted."""
+    names = _list_rule_names(prefix)
+    deleted = 0
+    for name in names:
+        # Extract date part: rps-pipeline-pre-YYYYMMDD-HHMM or rps-pipeline-post-YYYYMMDD-HHMM
+        # The date is the 8 chars starting after the last prefix segment
+        rest = name[len(prefix):]
+        if len(rest) >= 8:
+            rule_date = rest[:8]  # YYYYMMDD
+            if rule_date < today_str:
+                print(f"  deleting old rule: {name}")
+                _delete_rule(name)
+                deleted += 1
+    return deleted
+
+
 def _put_rule(name: str, schedule_expression: str) -> None:
     region = os.environ.get("AWS_REGION", "eu-west-2")
     _run(
@@ -179,12 +237,21 @@ def main() -> None:
 
     print(f"found {len(times)} unique UK/IRE race times")
 
+    # Clean up old rules from before today
+    today_stamp = date_yyyy_mm_dd.replace("-", "")
+    deleted = _cleanup_old_rules("rps-pipeline-", today_stamp)
+    if deleted:
+        print(f"cleaned up {deleted} old rule(s)")
+
     # Schedule pipeline 10 mins before each race
     for dt in times:
         dt_pre = dt - timedelta(minutes=10)
         stamp = dt.strftime("%Y%m%d-%H%M")
         rule_name = f"rps-pipeline-pre-{stamp}"
 
+        if _rule_exists(rule_name):
+            print(f"  skip pre-race  {dt_pre.strftime('%H:%M')}  (rule {rule_name} already exists)")
+            continue
         _put_rule(rule_name, _cron_expr(dt_pre))
         _put_target(
             rule_name=rule_name,
@@ -203,17 +270,20 @@ def main() -> None:
     stamp = last_dt.strftime("%Y%m%d-%H%M")
     rule_name = f"rps-pipeline-post-{stamp}"
 
-    _put_rule(rule_name, _cron_expr(dt_post))
-    _put_target(
-        rule_name=rule_name,
-        target_id="ecs-run-task",
-        cluster_arn=cluster_arn,
-        role_arn=role_arn,
-        task_def_arn=taskdef_pipeline,
-        subnets_csv=subnets_csv,
-        security_groups_csv=security_groups_csv,
-    )
-    print(f"  scheduled post-race {dt_post.strftime('%H:%M')}  (30 min after last race at {last_dt.strftime('%H:%M')})")
+    if _rule_exists(rule_name):
+        print(f"  skip post-race {dt_post.strftime('%H:%M')}  (rule {rule_name} already exists)")
+    else:
+        _put_rule(rule_name, _cron_expr(dt_post))
+        _put_target(
+            rule_name=rule_name,
+            target_id="ecs-run-task",
+            cluster_arn=cluster_arn,
+            role_arn=role_arn,
+            task_def_arn=taskdef_pipeline,
+            subnets_csv=subnets_csv,
+            security_groups_csv=security_groups_csv,
+        )
+        print(f"  scheduled post-race {dt_post.strftime('%H:%M')}  (30 min after last race at {last_dt.strftime('%H:%M')})")
 
     print("done")
 
