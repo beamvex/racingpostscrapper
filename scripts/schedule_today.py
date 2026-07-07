@@ -78,10 +78,10 @@ def _cleanup_old_rules(prefix: str, today_str: str) -> int:
     deleted = 0
     for name in names:
         # Extract date part: rps-pipeline-pre-YYYYMMDD-HHMM or rps-pipeline-post-YYYYMMDD-HHMM
-        # The date is the 8 chars starting after the last prefix segment
-        rest = name[len(prefix):]
-        if len(rest) >= 8:
-            rule_date = rest[:8]  # YYYYMMDD
+        # After prefix, skip "pre-" or "post-" (4 chars), then 8-char date
+        rest = name[len(prefix):]  # e.g. "pre-20260706-1315" or "post-20260706-1315"
+        if len(rest) >= 13:  # pre-/post- (4) + YYYYMMDD (8) + at least "-"
+            rule_date = rest[4:12]  # skip "pre-" or "post-"
             if rule_date < today_str:
                 print(f"  deleting old rule: {name}")
                 _delete_rule(name)
