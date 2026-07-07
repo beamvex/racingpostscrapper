@@ -88,7 +88,9 @@ data "aws_iam_policy_document" "ecs_task_events" {
       "events:PutRule",
       "events:PutTargets",
       "events:DeleteRule",
-      "events:RemoveTargets"
+      "events:RemoveTargets",
+      "events:ListRules",
+      "events:DescribeRule"
     ]
 
     resources = ["*"]
