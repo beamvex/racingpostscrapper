@@ -62,3 +62,46 @@ resource "aws_lambda_function" "probabilities" {
   }
 }
 
+# --- API Gateway ---
+
+resource "aws_apigatewayv2_api" "probabilities" {
+  name          = "racingpost-probabilities"
+  protocol_type = "HTTP"
+}
+
+resource "aws_apigatewayv2_integration" "probabilities" {
+  api_id           = aws_apigatewayv2_api.probabilities.id
+  integration_type = "AWS_PROXY"
+  integration_uri  = aws_lambda_function.probabilities.arn
+}
+
+resource "aws_apigatewayv2_route" "probabilities_root" {
+  api_id    = aws_apigatewayv2_api.probabilities.id
+  route_key = "GET /"
+  target    = "integrations/${aws_apigatewayv2_integration.probabilities.id}"
+}
+
+resource "aws_apigatewayv2_route" "probabilities_date" {
+  api_id    = aws_apigatewayv2_api.probabilities.id
+  route_key = "GET /{date}"
+  target    = "integrations/${aws_apigatewayv2_integration.probabilities.id}"
+}
+
+resource "aws_apigatewayv2_stage" "probabilities" {
+  api_id      = aws_apigatewayv2_api.probabilities.id
+  name        = "$default"
+  auto_deploy = true
+}
+
+resource "aws_lambda_permission" "apigateway" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.probabilities.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_apigatewayv2_api.probabilities.execution_arn}/*/*"
+}
+
+output "probabilities_api_url" {
+  value = aws_apigatewayv2_stage.probabilities.invoke_url
+}
+
