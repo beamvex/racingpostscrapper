@@ -164,18 +164,52 @@ def _put_target(
 
 
 def _is_uk_or_ire_course(course: str) -> bool:
-    """UK courses have no suffix or (AW); Irish have (IRE). Exclude others (e.g. French)."""
-    c = course.strip()
+    """Check if course is UK or Irish, handling both display names and URL slugs."""
+    c = course.strip().lower()
     if not c:
         return False
-    if "(IRE)" in c:
+    # Display name patterns
+    if "(ire)" in c:
         return True
-    if "(AW)" in c:
+    if "(aw)" in c:
         return True
-    # No country suffix = UK
-    if "(" not in c:
+    # No parentheses in display name = UK
+    if "(" not in c and " " in c:
         return True
-    return False
+    # URL slug patterns
+    if c.endswith("-aw") or c.endswith("-aw-gb"):
+        return True
+    # Slugs with hyphens that aren't AW are non-UK/IRE (e.g. happy-valley, santa-anita)
+    if "-" in c:
+        return False
+    # Plain slug without hyphens: likely UK/IRE (e.g. ayr, ascot, roscommon)
+    return True
+
+
+def _try_parse_time(time_str: str, date_yyyy_mm_dd: str) -> datetime | None:
+    """Parse a time string that may be ISO 8601 or plain HH:MM."""
+    t = time_str.strip()
+    if not t:
+        return None
+    # Try ISO 8601 first
+    try:
+        return _parse_iso8601(t)
+    except Exception:
+        pass
+    # Try HH:MM
+    m = re.match(r'^(\d{1,2}):(\d{2})$', t)
+    if m:
+        try:
+            return datetime(
+                int(date_yyyy_mm_dd[:4]),
+                int(date_yyyy_mm_dd[5:7]),
+                int(date_yyyy_mm_dd[8:10]),
+                int(m.group(1)), int(m.group(2)),
+                tzinfo=timezone.utc,
+            )
+        except Exception:
+            pass
+    return None
 
 
 def _course_from_url(url: str) -> str:
@@ -195,9 +229,11 @@ def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: st
     with open(html_path, "r", encoding="utf-8") as f:
         html = f.read()
 
+    seen = set()
+    out: list[datetime] = []
+
     # Try Next.js data first
     marker = '<script id="__NEXT_DATA__" type="application/json">'
-    next_data = None
     idx = html.find(marker)
     if idx != -1:
         start = idx + len(marker)
@@ -206,57 +242,57 @@ def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: st
             try:
                 next_data = json.loads(html[start:end])
             except json.JSONDecodeError:
-                pass
+                next_data = None
 
-    seen = set()
-    out: list[datetime] = []
-
-    if next_data:
-        # Walk the Next.js data for race entries
-        def walk(obj, depth=0):
-            if depth > 20:
-                return
-            if isinstance(obj, dict):
-                # Look for race entries with time and course
-                course = (obj.get("courseName") or obj.get("course") or "").strip()
-                time_str = (obj.get("raceTime") or obj.get("time") or obj.get("offTime") or "").strip()
-                if course and time_str and _is_uk_or_ire_course(course):
-                    try:
-                        dt = _parse_iso8601(time_str)
-                    except Exception:
-                        dt = None
-                    if dt:
-                        key = dt.isoformat()
-                        if key not in seen:
-                            seen.add(key)
-                            out.append(dt)
-                for v in obj.values():
-                    walk(v, depth + 1)
-            elif isinstance(obj, list):
-                for v in obj:
-                    walk(v, depth + 1)
-        walk(next_data)
+            if next_data:
+                # Walk the Next.js data for race entries with time + course
+                def walk(obj, depth=0):
+                    if depth > 20:
+                        return
+                    if isinstance(obj, dict):
+                        course = (obj.get("courseName") or obj.get("course") or
+                                  obj.get("meetingName") or obj.get("meeting") or
+                                  obj.get("trackName") or obj.get("venue") or "").strip()
+                        time_str = (obj.get("raceTime") or obj.get("time") or
+                                    obj.get("offTime") or obj.get("startTime") or
+                                    obj.get("scheduledTime") or "").strip()
+                        if course and time_str and _is_uk_or_ire_course(course):
+                            dt = _try_parse_time(time_str, date_yyyy_mm_dd)
+                            if dt:
+                                key = dt.isoformat()
+                                if key not in seen:
+                                    seen.add(key)
+                                    out.append(dt)
+                        for v in obj.values():
+                            walk(v, depth + 1)
+                    elif isinstance(obj, list):
+                        for v in obj:
+                            walk(v, depth + 1)
+                walk(next_data)
 
     if out:
         out.sort()
+        print(f"  extracted {len(out)} times from Next.js data")
         return out
 
-    # Fallback: extract from racecard URLs and nearby times in HTML
-    url_pattern = re.compile(r'https://www\.racingpost\.com/racecards/\d+/[^/"]+/\d{4}-\d{2}-\d{2}/\d+')
+    # Fallback: extract from racecard URLs (relative or absolute) and nearby times
+    url_pattern = re.compile(r'(?:https://www\.racingpost\.com)?/racecards/\d+/[^/"]+/\d{4}-\d{2}-\d{2}/\d+')
     time_pattern = re.compile(r'\b(\d{2}:\d{2})\b')
 
-    urls = url_pattern.findall(html)
-    times = time_pattern.findall(html)
-
-    # Pair URLs with times by position in HTML
     url_positions = [(m.start(), m.group()) for m in url_pattern.finditer(html)]
     time_positions = [(m.start(), m.group()) for m in time_pattern.finditer(html)]
+
+    print(f"  fallback: found {len(url_positions)} racecard URLs, {len(time_positions)} HH:MM times")
+
+    # Debug: show unique course slugs
+    all_slugs = sorted(set(_course_from_url(u) for _, u in url_positions))
+    print(f"  course slugs: {all_slugs}")
 
     for url_pos, url in url_positions:
         course = _course_from_url(url)
         if not _is_uk_or_ire_course(course):
             continue
-        # Find closest time before this URL
+        # Find closest time before this URL (within 2000 chars)
         best_time = None
         best_dist = 99999
         for t_pos, t_str in time_positions:
