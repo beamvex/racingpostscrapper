@@ -173,22 +173,22 @@ if [ -n "${SCRAPER_DATA_BUCKET_NAME:-}" ]; then
 fi
 
 # ============================================================
-# STEP 9: Compute probabilities and generate HTML report
+# STEP 9: Compute probabilities and write parquet report
 # ============================================================
-PROBABILITIES_HTML="${OUT_DIR}/racecard-report-${RESULTS_DATE_USED}.html"
+PROBABILITIES_PARQUET="${OUT_DIR}/racecard-probabilities-${RESULTS_DATE_USED}.parquet"
 echo "=== step 9: computing probabilities ==="
 /app/target/release/today_first_race_table \
   --in="${RUNNERS_OUT}" \
   --history-dir="${HISTORY_DIR}" \
-  --out="${PROBABILITIES_HTML}"
+  --out="${PROBABILITIES_PARQUET}"
 
 # ============================================================
-# STEP 10: Upload HTML report to S3
+# STEP 10: Upload probabilities parquet to S3
 # ============================================================
-if [ -n "${SCRAPER_DATA_BUCKET_NAME:-}" ] && [ -f "${PROBABILITIES_HTML}" ]; then
-  echo "=== step 10: uploading html report ==="
+if [ -n "${SCRAPER_DATA_BUCKET_NAME:-}" ] && [ -f "${PROBABILITIES_PARQUET}" ]; then
+  echo "=== step 10: uploading probabilities parquet ==="
   S3_PROBABILITIES_PREFIX="s3://${SCRAPER_DATA_BUCKET_NAME}/probabilities/${Y}/${M}/${D}/"
-  aws_cp "${PROBABILITIES_HTML}" "${S3_PROBABILITIES_PREFIX}$(basename "${PROBABILITIES_HTML}")"
+  aws_cp "${PROBABILITIES_PARQUET}" "${S3_PROBABILITIES_PREFIX}$(basename "${PROBABILITIES_PARQUET}")"
 fi
 
 # --- cleanup ---

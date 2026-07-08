@@ -53,10 +53,33 @@ resource "aws_iam_role_policy" "lambda_s3" {
   policy = data.aws_iam_policy_document.lambda_s3.json
 }
 
+resource "null_resource" "lambda_package" {
+  triggers = {
+    lambda_src   = filemd5("${path.module}/lambda_function.py")
+    requirements = filemd5("${path.module}/lambda_requirements.txt")
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      rm -rf "${path.module}/lambda_package"
+      mkdir -p "${path.module}/lambda_package"
+      pip install \
+        -r "${path.module}/lambda_requirements.txt" \
+        -t "${path.module}/lambda_package" \
+        --platform manylinux2014_x86_64 \
+        --python-version 3.11 \
+        --only-binary=:all: \
+        -q
+      cp "${path.module}/lambda_function.py" "${path.module}/lambda_package/"
+    EOT
+  }
+}
+
 data "archive_file" "lambda_zip" {
   type        = "zip"
-  source_file = "${path.module}/lambda_function.py"
+  source_dir  = "${path.module}/lambda_package"
   output_path = "${path.module}/lambda_function.zip"
+  depends_on  = [null_resource.lambda_package]
 }
 
 resource "aws_lambda_function" "probabilities" {
