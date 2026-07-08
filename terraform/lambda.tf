@@ -53,53 +53,27 @@ resource "aws_iam_role_policy" "lambda_s3" {
   policy = data.aws_iam_policy_document.lambda_s3.json
 }
 
-resource "null_resource" "lambda_package" {
-  triggers = {
-    lambda_src   = filemd5("${path.module}/lambda_function.py")
-    requirements = filemd5("${path.module}/lambda_requirements.txt")
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      rm -rf "${path.module}/lambda_package"
-      mkdir -p "${path.module}/lambda_package"
-      pip install \
-        -r "${path.module}/lambda_requirements.txt" \
-        -t "${path.module}/lambda_package" \
-        --platform manylinux2014_x86_64 \
-        --python-version 3.11 \
-        --only-binary=:all: \
-        -q
-      cp "${path.module}/lambda_function.py" "${path.module}/lambda_package/"
-    EOT
-  }
+data "aws_lambda_layer_version" "awssdk_pandas" {
+  layer_name         = "arn:aws:lambda:eu-west-2:336392948345:layer:AWSSDKPandas-Python311"
+  compatible_runtime = "python3.11"
 }
 
 data "archive_file" "lambda_zip" {
   type        = "zip"
-  source_dir  = "${path.module}/lambda_package"
+  source_file = "${path.module}/lambda_function.py"
   output_path = "${path.module}/lambda_function.zip"
-  depends_on  = [null_resource.lambda_package]
-}
-
-resource "aws_s3_object" "lambda_zip" {
-  bucket = aws_s3_bucket.scraper_data.id
-  key    = "lambda/racingpost-probabilities.zip"
-  source = data.archive_file.lambda_zip.output_path
-  etag   = data.archive_file.lambda_zip.output_md5
 }
 
 resource "aws_lambda_function" "probabilities" {
-  s3_bucket         = aws_s3_object.lambda_zip.bucket
-  s3_key            = aws_s3_object.lambda_zip.key
-  s3_object_version = aws_s3_object.lambda_zip.version_id
-  function_name     = "racingpost-probabilities"
-  role              = aws_iam_role.lambda.arn
-  handler           = "lambda_function.lambda_handler"
-  runtime           = "python3.11"
-  source_code_hash  = data.archive_file.lambda_zip.output_base64sha256
-  timeout           = 30
-  memory_size       = 512
+  filename         = data.archive_file.lambda_zip.output_path
+  function_name    = "racingpost-probabilities"
+  role             = aws_iam_role.lambda.arn
+  handler          = "lambda_function.lambda_handler"
+  runtime          = "python3.11"
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  timeout          = 30
+  memory_size      = 512
+  layers           = [data.aws_lambda_layer_version.awssdk_pandas.arn]
 
   environment {
     variables = {
