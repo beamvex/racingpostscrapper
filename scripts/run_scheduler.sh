@@ -41,7 +41,7 @@ echo "scraping time-order page for ${RESULTS_DATE}"
 
 # Only scrape the time-order page (not individual racecards)
 # The scheduler just needs race times, not runner details
-/app/target/release/racecards_time_order_scraper "${RESULTS_DATE}"
+/app/target/release/racecards_time_order_scraper --time-order-only "${RESULTS_DATE}"
 
 kill ${CHROMIUM_PID} >/dev/null 2>&1 || true
 kill ${XVFB_PID} >/dev/null 2>&1 || true

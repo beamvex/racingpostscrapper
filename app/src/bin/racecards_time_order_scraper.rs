@@ -7,8 +7,17 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("racecards: starting");
     std::fs::create_dir_all("/data").context("create /data")?;
 
-    let results_date = std::env::args()
-        .nth(1)
+    let mut time_order_only = false;
+    let mut results_date: Option<String> = None;
+    for arg in std::env::args().skip(1) {
+        if arg == "--time-order-only" {
+            time_order_only = true;
+        } else {
+            results_date = Some(arg);
+        }
+    }
+
+    let results_date = results_date
         .or_else(|| std::env::var("RESULTS_DATE").ok())
         .unwrap_or_else(racingpost_scraper::utils::current_utc_date_yyyy_mm_dd);
 
@@ -30,11 +39,15 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("racecards: writing {} urls to {}", urls.len(), urls_path);
     std::fs::write(&urls_path, urls.join("\n")).with_context(|| format!("write {urls_path}"))?;
 
-    let cards_dir = format!("{out_base_dir}racingpost-racecards-{results_date}-racecards-html");
-    std::fs::create_dir_all(&cards_dir).with_context(|| format!("create {cards_dir}"))?;
-    eprintln!("racecards: downloading {} racecards into {}", urls.len(), cards_dir);
-    let (downloaded, failed) = download_racecards_html(&mut browser, &urls, &cards_dir).await?;
-    eprintln!("racecards: downloaded {} (failed {})", downloaded, failed);
+    if time_order_only {
+        eprintln!("racecards: --time-order-only, skipping racecard downloads");
+    } else {
+        let cards_dir = format!("{out_base_dir}racingpost-racecards-{results_date}-racecards-html");
+        std::fs::create_dir_all(&cards_dir).with_context(|| format!("create {cards_dir}"))?;
+        eprintln!("racecards: downloading {} racecards into {}", urls.len(), cards_dir);
+        let (downloaded, failed) = download_racecards_html(&mut browser, &urls, &cards_dir).await?;
+        eprintln!("racecards: downloaded {} (failed {})", downloaded, failed);
+    }
 
     eprintln!("racecards: closing browser");
     browser.close().await.ok();
