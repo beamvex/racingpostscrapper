@@ -415,6 +415,10 @@ fn race_to_json_value(meta: &RaceMeta, runners: &[RunnerRec]) -> Value {
             "weight_lb".to_string(),
             Value::String(r.weight_lb.clone().unwrap_or_default()),
         );
+        ro.insert(
+            "odds".to_string(),
+            Value::String(r.odds.clone().unwrap_or_default()),
+        );
         runners_out.push(Value::Object(ro));
     }
     obj.insert("runners".to_string(), Value::Array(runners_out));
@@ -426,7 +430,7 @@ fn build_lines(meta: RaceMeta, runners: Vec<RunnerRec>) -> Vec<String> {
     let mut out = Vec::with_capacity(runners.len());
     for r in runners {
         out.push(format!(
-            "{{\"course\":\"{}\",\"time\":\"{}\",\"race_name\":\"{}\",\"going\":\"{}\",\"horse\":\"{}\",\"jockey\":\"{}\",\"trainer\":\"{}\",\"age\":\"{}\",\"weight\":\"{}\",\"weight_st\":\"{}\",\"weight_lb\":\"{}\"}}",
+            "{{\"course\":\"{}\",\"time\":\"{}\",\"race_name\":\"{}\",\"going\":\"{}\",\"horse\":\"{}\",\"jockey\":\"{}\",\"trainer\":\"{}\",\"age\":\"{}\",\"weight\":\"{}\",\"weight_st\":\"{}\",\"weight_lb\":\"{}\",\"odds\":\"{}\"}}",
             json_escape(meta.course.as_deref().unwrap_or("")),
             json_escape(meta.time.as_deref().unwrap_or("")),
             json_escape(meta.race_name.as_deref().unwrap_or("")),
@@ -437,7 +441,8 @@ fn build_lines(meta: RaceMeta, runners: Vec<RunnerRec>) -> Vec<String> {
             json_escape(r.age.as_deref().unwrap_or("")),
             json_escape(r.weight.as_deref().unwrap_or("")),
             json_escape(r.weight_st.as_deref().unwrap_or("")),
-            json_escape(r.weight_lb.as_deref().unwrap_or(""))
+            json_escape(r.weight_lb.as_deref().unwrap_or("")),
+            json_escape(r.odds.as_deref().unwrap_or(""))
         ));
     }
     out
@@ -592,6 +597,8 @@ fn extract_runners_from_html(html: &str) -> Vec<RunnerRec> {
             continue;
         }
 
+        let odds = extract_odds_from_html_block(block);
+
         out.push(RunnerRec {
             horse,
             jockey,
@@ -600,6 +607,7 @@ fn extract_runners_from_html(html: &str) -> Vec<RunnerRec> {
             weight,
             weight_st,
             weight_lb,
+            odds,
         });
 
         start = next;
@@ -639,6 +647,45 @@ fn find_age_yo(s: &str) -> Option<String> {
 
         if i + 1 < bytes.len() && bytes[i] == b'y' && bytes[i + 1] == b'o' {
             return Some(s[start..i].to_string());
+        }
+    }
+    None
+}
+
+fn extract_odds_from_html_block(block: &str) -> Option<String> {
+    // Look for odds in data-testid attributes or as decimal numbers near the runner.
+    // Common patterns: data-testid="Text__Odds", or decimal like 3.95, 5/1, etc.
+    if let Some(v) = extract_first_testid_text(block, &["Text__Odds", "Text__Price", "Text__ForecastPrice"]) {
+        return Some(v);
+    }
+    // Fallback: find a decimal odds pattern (e.g. 3.95, 14.00) in the block.
+    // Look for numbers with exactly 2 decimal places that look like odds (between 1.01 and 999.99).
+    let bytes = block.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if !bytes[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        if i < bytes.len() && bytes[i] == b'.' {
+            i += 1;
+            let mut digits = 0usize;
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+                digits += 1;
+            }
+            if digits == 2 {
+                let num_str = std::str::from_utf8(&bytes[start..i]).ok()?;
+                if let Ok(val) = num_str.parse::<f64>() {
+                    if val >= 1.01 && val <= 999.99 {
+                        return Some(num_str.to_string());
+                    }
+                }
+            }
         }
     }
     None
@@ -756,6 +803,7 @@ struct RunnerRec {
     weight: Option<String>,
     weight_st: Option<String>,
     weight_lb: Option<String>,
+    odds: Option<String>,
 }
 
 fn extract_race_meta(v: &Value) -> RaceMeta {
@@ -816,6 +864,7 @@ fn extract_runners(v: &Value) -> Vec<RunnerRec> {
             let trainer = first_string(obj, &["trainerName", "trainer"]);
             let age = first_string_or_number(obj, &["age", "horseAge", "ageYears", "ageYrs"]);
             let (weight, weight_st, weight_lb) = extract_weight_any(obj);
+            let odds = first_string_or_number(obj, &["odds", "currentOdds", "price", "forecastPrice", "decimalOdds", "winOdds", "runnerOdds"]);
 
             let looks_like_runner = horse.is_some() && (jockey.is_some() || trainer.is_some());
             if looks_like_runner {
@@ -827,6 +876,7 @@ fn extract_runners(v: &Value) -> Vec<RunnerRec> {
                     weight,
                     weight_st,
                     weight_lb,
+                    odds,
                 });
             }
         }
