@@ -82,13 +82,24 @@ data "archive_file" "lambda_zip" {
   depends_on  = [null_resource.lambda_package]
 }
 
+resource "aws_s3_object" "lambda_zip" {
+  bucket = aws_s3_bucket.scraper_data.id
+  key    = "lambda/racingpost-probabilities.zip"
+  source = data.archive_file.lambda_zip.output_path
+  etag   = data.archive_file.lambda_zip.output_md5
+}
+
 resource "aws_lambda_function" "probabilities" {
-  filename         = data.archive_file.lambda_zip.output_path
-  function_name    = "racingpost-probabilities"
-  role             = aws_iam_role.lambda.arn
-  handler          = "lambda_function.lambda_handler"
-  runtime          = "python3.11"
-  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+  s3_bucket         = aws_s3_object.lambda_zip.bucket
+  s3_key            = aws_s3_object.lambda_zip.key
+  s3_object_version = aws_s3_object.lambda_zip.version_id
+  function_name     = "racingpost-probabilities"
+  role              = aws_iam_role.lambda.arn
+  handler           = "lambda_function.lambda_handler"
+  runtime           = "python3.11"
+  source_code_hash  = data.archive_file.lambda_zip.output_base64sha256
+  timeout           = 30
+  memory_size       = 512
 
   environment {
     variables = {
