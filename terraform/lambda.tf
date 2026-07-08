@@ -53,11 +53,6 @@ resource "aws_iam_role_policy" "lambda_s3" {
   policy = data.aws_iam_policy_document.lambda_s3.json
 }
 
-data "aws_lambda_layer_version" "awssdk_pandas" {
-  layer_name         = "arn:aws:lambda:eu-west-2:336392948345:layer:AWSSDKPandas-Python311"
-  compatible_runtime = "python3.11"
-}
-
 data "archive_file" "lambda_zip" {
   type        = "zip"
   source_file = "${path.module}/lambda_function.py"
@@ -73,7 +68,10 @@ resource "aws_lambda_function" "probabilities" {
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
   timeout          = 30
   memory_size      = 512
-  layers           = [data.aws_lambda_layer_version.awssdk_pandas.arn]
+
+  # AWS SDK for pandas 3.17.0 — eu-west-2 / Python 3.11 / x86_64
+  # https://aws-sdk-pandas.readthedocs.io/en/stable/layers.html
+  layers = ["arn:aws:lambda:eu-west-2:336392948345:layer:AWSSDKPandas-Python311:33"]
 
   environment {
     variables = {
