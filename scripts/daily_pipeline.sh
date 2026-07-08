@@ -142,19 +142,19 @@ if [ "${RACECARD_EXIT}" -ne 0 ]; then
 fi
 
 # ============================================================
-# STEP 6: Parse racecard HTML into runners JSONL
+# STEP 6: Parse racecard HTML into runners parquet
 # ============================================================
 HTML_DIR="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-racecards-html"
-RUNNERS_OUT="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-runners.jsonl"
+RUNNERS_OUT="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-runners.parquet"
 
 echo "=== step 6: parsing racecard html ==="
 /app/target/release/racecard_html_dir_parser --html-dir "${HTML_DIR}" --out "${RUNNERS_OUT}"
 
 # ============================================================
-# STEP 7: Upload runners JSONL to S3
+# STEP 7: Upload runners parquet to S3
 # ============================================================
 if [ -n "${SCRAPER_DATA_BUCKET_NAME:-}" ] && [ -f "${RUNNERS_OUT}" ]; then
-  echo "=== step 7: uploading runners jsonl ==="
+  echo "=== step 7: uploading runners parquet ==="
   S3_RACECARDS_PREFIX="s3://${SCRAPER_DATA_BUCKET_NAME}/racecards/${Y}/${M}/${D}/"
   aws_cp "${RUNNERS_OUT}" "${S3_RACECARDS_PREFIX}$(basename "${RUNNERS_OUT}")"
 fi

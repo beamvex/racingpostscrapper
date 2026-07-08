@@ -1,7 +1,6 @@
 use anyhow::Context;
 use arrow::array::Array;
 use chrono::{DateTime, Duration, Utc};
-use serde::Deserialize;
 use std::fs::File;
 use std::fs;
 use std::collections::HashMap;
@@ -62,24 +61,6 @@ struct HorseContextKey {
     going: String,
 }
 
-#[derive(Deserialize)]
-struct RunnerRow {
-    #[serde(default)]
-    course: String,
-    #[serde(default)]
-    time: String,
-    #[serde(default)]
-    race_name: String,
-    #[serde(default)]
-    going: String,
-    #[serde(default)]
-    horse: String,
-    #[serde(default)]
-    jockey: String,
-    #[serde(default)]
-    trainer: String,
-}
-
 fn main() -> anyhow::Result<()> {
     let today = racingpost_scraper::utils::current_utc_date_yyyy_mm_dd();
     eprintln!("today-first-race: date={today}");
@@ -124,7 +105,7 @@ fn main() -> anyhow::Result<()> {
 
     let in_path = in_path_arg.unwrap_or_else(|| {
         format!(
-            "{}/racecards/{}/{}/{}/racingpost-racecards-{}-runners.jsonl",
+            "{}/racecards/{}/{}/{}/racingpost-racecards-{}-runners.parquet",
             root, y, m, d, today
         )
     });
@@ -140,10 +121,8 @@ fn main() -> anyhow::Result<()> {
     });
 
     eprintln!("today-first-race: reading {in_path}");
-    let bytes = fs::read(&in_path).with_context(|| format!("read {in_path}"))?;
-    let s = String::from_utf8(bytes).context("decode input as utf-8")?;
 
-    let races_all = extract_all_races_from_jsonl(&s)?;
+    let races_all = extract_all_races_from_parquet(&in_path)?;
     let races = filter_recent_races(races_all.clone(), 30);
     eprintln!(
         "today-first-race: races_total={} races_recent={}",
@@ -248,7 +227,7 @@ fn build_html_report(
 
     out.push_str("<hr class=\"my-3\">\n");
     out.push_str("<div class=\"small text-muted\">\n");
-    out.push_str("<div><strong>Racecard JSONL:</strong> ");
+    out.push_str("<div><strong>Racecard parquet:</strong> ");
     out.push_str(&html_escape(in_path));
     out.push_str("</div>\n");
     out.push_str("<div><strong>History dir:</strong> ");
@@ -1070,43 +1049,49 @@ fn list_parquet_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) -> anyhow::R
     Ok(())
 }
 
-fn extract_all_races_from_jsonl(s: &str) -> anyhow::Result<Vec<(RaceKey, Vec<RunnerMini>)>> {
+fn extract_all_races_from_parquet(path: &str) -> anyhow::Result<Vec<(RaceKey, Vec<RunnerMini>)>> {
+    let batches = read_parquet_all_batches(Path::new(path))
+        .with_context(|| format!("read parquet {}", path))?;
+
     let mut race_order: Vec<RaceKey> = Vec::new();
     let mut map: HashMap<RaceKey, Vec<RunnerMini>> = HashMap::new();
 
-    for (i, line) in s.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
+    for batch in &batches {
+        let course_arr = column_as_strings(batch, "course")?;
+        let time_arr = column_as_strings(batch, "time")?;
+        let race_name_arr = column_as_strings(batch, "race_name")?;
+        let going_arr = column_as_strings(batch, "going")?;
+        let horse_arr = column_as_strings(batch, "horse")?;
+        let jockey_arr = column_as_strings(batch, "jockey")?;
+        let trainer_arr = column_as_strings(batch, "trainer")?;
+
+        for i in 0..batch.num_rows() {
+            let horse = horse_arr[i].clone();
+            if horse.trim().is_empty() {
+                continue;
+            }
+            if is_non_runner(&horse) || is_non_runner(&jockey_arr[i]) || is_non_runner(&trainer_arr[i]) {
+                continue;
+            }
+
+            let derived_course = derive_course_from_race_name(&course_arr[i], &race_name_arr[i]);
+            let key = RaceKey {
+                course: derived_course,
+                time: time_arr[i].clone(),
+                race_name: race_name_arr[i].clone(),
+                going: going_arr[i].clone(),
+            };
+
+            if !map.contains_key(&key) {
+                race_order.push(key.clone());
+            }
+
+            map.entry(key).or_default().push(RunnerMini {
+                horse,
+                jockey: jockey_arr[i].clone(),
+                trainer: trainer_arr[i].clone(),
+            });
         }
-
-        let row: RunnerRow = serde_json::from_str(line)
-            .with_context(|| format!("parse jsonl line {}", i + 1))?;
-
-        if row.horse.trim().is_empty() {
-            continue;
-        }
-        if is_non_runner(&row.horse) || is_non_runner(&row.jockey) || is_non_runner(&row.trainer) {
-            continue;
-        }
-
-        let derived_course = derive_course_from_race_name(&row.course, &row.race_name);
-        let key = RaceKey {
-            course: derived_course,
-            time: row.time,
-            race_name: row.race_name,
-            going: row.going,
-        };
-
-        if !map.contains_key(&key) {
-            race_order.push(key.clone());
-        }
-
-        map.entry(key).or_default().push(RunnerMini {
-            horse: row.horse,
-            jockey: row.jockey,
-            trainer: row.trainer,
-        });
     }
 
     let mut out = Vec::<(RaceKey, Vec<RunnerMini>)>::new();
@@ -1125,10 +1110,21 @@ fn extract_all_races_from_jsonl(s: &str) -> anyhow::Result<Vec<(RaceKey, Vec<Run
     });
 
     if out.is_empty() {
-        anyhow::bail!("no jsonl records found")
+        anyhow::bail!("no racecard records found in parquet")
     }
 
     Ok(out)
+}
+
+fn column_as_strings(batch: &arrow::record_batch::RecordBatch, name: &str) -> anyhow::Result<Vec<String>> {
+    let col = batch
+        .column_by_name(name)
+        .with_context(|| format!("column '{}' not found", name))?;
+    let arr = col
+        .as_any()
+        .downcast_ref::<arrow::array::StringArray>()
+        .with_context(|| format!("column '{}' is not StringArray", name))?;
+    Ok((0..arr.len()).map(|i| arr.value(i).to_string()).collect())
 }
 
 fn is_non_runner(s: &str) -> bool {

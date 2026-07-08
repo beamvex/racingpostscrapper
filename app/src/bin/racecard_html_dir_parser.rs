@@ -1,6 +1,14 @@
 use anyhow::Context;
+use arrow::array::{ArrayRef, StringArray};
+use arrow::datatypes::{DataType, Field, Schema};
+use arrow::record_batch::RecordBatch;
+use parquet::arrow::ArrowWriter;
+use parquet::basic::Compression;
+use parquet::file::properties::WriterProperties;
+use parquet::file::properties::WriterVersion;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -25,7 +33,10 @@ async fn main() -> anyhow::Result<()> {
         .collect();
     html_paths.sort();
 
-    let mut lines = Vec::<String>::new();
+    let is_parquet = out_path.ends_with(".parquet");
+    let is_json = out_path.ends_with(".json");
+
+    let mut rows: Vec<RacecardRow> = Vec::new();
     let mut races: Vec<(RaceMeta, Vec<RunnerRec>)> = Vec::new();
     let mut horses: HashSet<String> = HashSet::new();
     let mut jockeys: HashSet<String> = HashSet::new();
@@ -45,12 +56,16 @@ async fn main() -> anyhow::Result<()> {
 
         match parse_one_racecard_html(&html) {
             Ok((meta, runners)) => {
-                if !out_path.ends_with(".json") {
-                    for r in build_lines(meta.clone(), runners.clone()) {
-                        lines.push(r);
+                if is_parquet {
+                    for r in &runners {
+                        rows.push(RacecardRow::from_runner(&meta, r));
                     }
-                } else {
+                } else if is_json {
                     races.push((meta.clone(), runners.clone()));
+                } else {
+                    for r in &runners {
+                        rows.push(RacecardRow::from_runner(&meta, r));
+                    }
                 }
 
                 for rr in runners {
@@ -83,11 +98,18 @@ async fn main() -> anyhow::Result<()> {
 
     eprintln!(
         "racecard-parser: writing {} runner records (failed {})",
-        lines.len(),
+        rows.len(),
         failed
     );
 
-    if out_path.ends_with(".json") {
+    if is_parquet {
+        write_racecard_parquet(&out_path, &rows)?;
+        // Also write JSONL for the scheduler
+        let jsonl_path = out_path.replace(".parquet", ".jsonl");
+        let lines: Vec<String> = rows.iter().map(|r| r.to_jsonl()).collect();
+        std::fs::write(&jsonl_path, lines.join("\n")).with_context(|| format!("write {jsonl_path}"))?;
+        eprintln!("racecard-parser: also wrote jsonl to {jsonl_path}");
+    } else if is_json {
         let mut races_json = Vec::<Value>::new();
         for (meta, runners) in races {
             races_json.push(race_to_json_value(&meta, &runners));
@@ -96,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
             .with_context(|| "serialize races json")?;
         std::fs::write(&out_path, s).with_context(|| format!("write {out_path}"))?;
     } else {
+        let lines: Vec<String> = rows.iter().map(|r| r.to_jsonl()).collect();
         std::fs::write(&out_path, lines.join("\n")).with_context(|| format!("write {out_path}"))?;
     }
 
@@ -166,7 +189,7 @@ fn parse_args() -> (String, String, String, String, String, String, String) {
 
     (
         html_dir.unwrap_or_else(|| "/data".to_string()),
-        out_path.unwrap_or_else(|| "/data/racecards-runners.jsonl".to_string()),
+        out_path.unwrap_or_else(|| "/data/racecards-runners.parquet".to_string()),
         athena_db.unwrap_or_else(|| "racingpost".to_string()),
         athena_racecard_table.unwrap_or_else(|| "racecard_runners".to_string()),
         athena_results_table.unwrap_or_else(|| "processed_full_results_runners".to_string()),
@@ -426,26 +449,118 @@ fn race_to_json_value(meta: &RaceMeta, runners: &[RunnerRec]) -> Value {
     Value::Object(obj)
 }
 
-fn build_lines(meta: RaceMeta, runners: Vec<RunnerRec>) -> Vec<String> {
-    let mut out = Vec::with_capacity(runners.len());
-    for r in runners {
-        out.push(format!(
-            "{{\"course\":\"{}\",\"time\":\"{}\",\"race_name\":\"{}\",\"going\":\"{}\",\"horse\":\"{}\",\"jockey\":\"{}\",\"trainer\":\"{}\",\"age\":\"{}\",\"weight\":\"{}\",\"weight_st\":\"{}\",\"weight_lb\":\"{}\",\"odds\":\"{}\"}}",
-            json_escape(meta.course.as_deref().unwrap_or("")),
-            json_escape(meta.time.as_deref().unwrap_or("")),
-            json_escape(meta.race_name.as_deref().unwrap_or("")),
-            json_escape(meta.going.as_deref().unwrap_or("")),
-            json_escape(r.horse.as_deref().unwrap_or("")),
-            json_escape(r.jockey.as_deref().unwrap_or("")),
-            json_escape(r.trainer.as_deref().unwrap_or("")),
-            json_escape(r.age.as_deref().unwrap_or("")),
-            json_escape(r.weight.as_deref().unwrap_or("")),
-            json_escape(r.weight_st.as_deref().unwrap_or("")),
-            json_escape(r.weight_lb.as_deref().unwrap_or("")),
-            json_escape(r.odds.as_deref().unwrap_or(""))
-        ));
+#[derive(Clone, Default)]
+struct RacecardRow {
+    course: String,
+    time: String,
+    race_name: String,
+    going: String,
+    horse: String,
+    jockey: String,
+    trainer: String,
+    age: String,
+    weight: String,
+    weight_st: String,
+    weight_lb: String,
+    odds: String,
+}
+
+impl RacecardRow {
+    fn from_runner(meta: &RaceMeta, r: &RunnerRec) -> Self {
+        RacecardRow {
+            course: meta.course.clone().unwrap_or_default(),
+            time: meta.time.clone().unwrap_or_default(),
+            race_name: meta.race_name.clone().unwrap_or_default(),
+            going: meta.going.clone().unwrap_or_default(),
+            horse: r.horse.clone().unwrap_or_default(),
+            jockey: r.jockey.clone().unwrap_or_default(),
+            trainer: r.trainer.clone().unwrap_or_default(),
+            age: r.age.clone().unwrap_or_default(),
+            weight: r.weight.clone().unwrap_or_default(),
+            weight_st: r.weight_st.clone().unwrap_or_default(),
+            weight_lb: r.weight_lb.clone().unwrap_or_default(),
+            odds: r.odds.clone().unwrap_or_default(),
+        }
     }
-    out
+
+    fn to_jsonl(&self) -> String {
+        format!(
+            "{{\"course\":\"{}\",\"time\":\"{}\",\"race_name\":\"{}\",\"going\":\"{}\",\"horse\":\"{}\",\"jockey\":\"{}\",\"trainer\":\"{}\",\"age\":\"{}\",\"weight\":\"{}\",\"weight_st\":\"{}\",\"weight_lb\":\"{}\",\"odds\":\"{}\"}}",
+            json_escape(&self.course),
+            json_escape(&self.time),
+            json_escape(&self.race_name),
+            json_escape(&self.going),
+            json_escape(&self.horse),
+            json_escape(&self.jockey),
+            json_escape(&self.trainer),
+            json_escape(&self.age),
+            json_escape(&self.weight),
+            json_escape(&self.weight_st),
+            json_escape(&self.weight_lb),
+            json_escape(&self.odds),
+        )
+    }
+}
+
+fn write_racecard_parquet(out_path: &str, rows: &[RacecardRow]) -> anyhow::Result<()> {
+    if let Some(parent) = std::path::Path::new(out_path).parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create {}", parent.display()))?;
+    }
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("course", DataType::Utf8, true),
+        Field::new("time", DataType::Utf8, true),
+        Field::new("race_name", DataType::Utf8, true),
+        Field::new("going", DataType::Utf8, true),
+        Field::new("horse", DataType::Utf8, true),
+        Field::new("jockey", DataType::Utf8, true),
+        Field::new("trainer", DataType::Utf8, true),
+        Field::new("age", DataType::Utf8, true),
+        Field::new("weight", DataType::Utf8, true),
+        Field::new("weight_st", DataType::Utf8, true),
+        Field::new("weight_lb", DataType::Utf8, true),
+        Field::new("odds", DataType::Utf8, true),
+    ]));
+
+    let make = |f: fn(&RacecardRow) -> &str| -> ArrayRef {
+        Arc::new(StringArray::from(
+            rows.iter().map(|r| {
+                let s = f(r);
+                if s.is_empty() { None } else { Some(s) }
+            }).collect::<Vec<_>>(),
+        ))
+    };
+
+    let columns: Vec<ArrayRef> = vec![
+        make(|r| &r.course),
+        make(|r| &r.time),
+        make(|r| &r.race_name),
+        make(|r| &r.going),
+        make(|r| &r.horse),
+        make(|r| &r.jockey),
+        make(|r| &r.trainer),
+        make(|r| &r.age),
+        make(|r| &r.weight),
+        make(|r| &r.weight_st),
+        make(|r| &r.weight_lb),
+        make(|r| &r.odds),
+    ];
+
+    let batch = RecordBatch::try_new(schema.clone(), columns)
+        .with_context(|| "build record batch")?;
+
+    let file = std::fs::File::create(out_path).with_context(|| format!("create {out_path}"))?;
+    let props = WriterProperties::builder()
+        .set_compression(Compression::SNAPPY)
+        .set_dictionary_enabled(false)
+        .set_writer_version(WriterVersion::PARQUET_1_0)
+        .build();
+    let mut writer = ArrowWriter::try_new(file, schema, Some(props))
+        .with_context(|| "create parquet writer")?;
+    writer.write(&batch).with_context(|| "write parquet")?;
+    writer.close().with_context(|| "close parquet")?;
+    Ok(())
 }
 
 fn extract_next_data_json(html: &str) -> Option<String> {

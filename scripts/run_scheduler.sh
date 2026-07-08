@@ -37,24 +37,19 @@ until curl -fsS "http://127.0.0.1:9222/json/version" >/dev/null 2>&1; do
 done
 
 RESULTS_DATE="${RESULTS_DATE:-$(date -u +%F)}"
-echo "scraping racecard for ${RESULTS_DATE}"
+echo "scraping time-order page for ${RESULTS_DATE}"
 
+# Only scrape the time-order page (not individual racecards)
+# The scheduler just needs race times, not runner details
 /app/target/release/racecards_time_order_scraper "${RESULTS_DATE}"
-
-Y="${RESULTS_DATE%%-*}"
-REST="${RESULTS_DATE#*-}"
-M="${REST%%-*}"
-D="${REST#*-}"
-
-HTML_DIR="/data/${Y}/${M}/${D}/racingpost-racecards-${RESULTS_DATE}-racecards-html"
-RUNNERS_OUT="/data/${Y}/${M}/${D}/racingpost-racecards-${RESULTS_DATE}-runners.jsonl"
-
-echo "parsing racecard html"
-/app/target/release/racecard_html_dir_parser --html-dir "${HTML_DIR}" --out "${RUNNERS_OUT}"
 
 kill ${CHROMIUM_PID} >/dev/null 2>&1 || true
 kill ${XVFB_PID} >/dev/null 2>&1 || true
 
 echo "running scheduler"
-export RACECARD_RUNNERS_JSONL="${RUNNERS_OUT}"
+Y="${RESULTS_DATE%%-*}"
+REST="${RESULTS_DATE#*-}"
+M="${REST%%-*}"
+D="${REST#*-}"
+export TIME_ORDER_HTML="/data/${Y}/${M}/${D}/racingpost-racecards-${RESULTS_DATE}.html"
 python3 /app/schedule_today.py

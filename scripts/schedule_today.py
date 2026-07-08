@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 from datetime import datetime, timedelta, timezone
 
@@ -177,36 +178,109 @@ def _is_uk_or_ire_course(course: str) -> bool:
     return False
 
 
-def _load_uk_ire_race_times(jsonl_path: str) -> list[datetime]:
+def _course_from_url(url: str) -> str:
+    """Extract course slug from racecard URL.
+    e.g. https://www.racingpost.com/racecards/3/ayr/2026-07-06/922295 -> ayr"""
+    parts = url.rstrip("/").split("/")
+    # URL: .../racecards/<id>/<course_slug>/<date>/<race_id>
+    try:
+        idx = parts.index("racecards")
+        return parts[idx + 2]
+    except (ValueError, IndexError):
+        return ""
+
+
+def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: str) -> list[datetime]:
+    """Parse the time-order page HTML to extract race times for UK/IRE courses."""
+    with open(html_path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    # Try Next.js data first
+    marker = '<script id="__NEXT_DATA__" type="application/json">'
+    next_data = None
+    idx = html.find(marker)
+    if idx != -1:
+        start = idx + len(marker)
+        end = html.find("</script>", start)
+        if end != -1:
+            try:
+                next_data = json.loads(html[start:end])
+            except json.JSONDecodeError:
+                pass
+
     seen = set()
     out: list[datetime] = []
 
-    with open(jsonl_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-            except json.JSONDecodeError:
-                continue
+    if next_data:
+        # Walk the Next.js data for race entries
+        def walk(obj, depth=0):
+            if depth > 20:
+                return
+            if isinstance(obj, dict):
+                # Look for race entries with time and course
+                course = (obj.get("courseName") or obj.get("course") or "").strip()
+                time_str = (obj.get("raceTime") or obj.get("time") or obj.get("offTime") or "").strip()
+                if course and time_str and _is_uk_or_ire_course(course):
+                    try:
+                        dt = _parse_iso8601(time_str)
+                    except Exception:
+                        dt = None
+                    if dt:
+                        key = dt.isoformat()
+                        if key not in seen:
+                            seen.add(key)
+                            out.append(dt)
+                for v in obj.values():
+                    walk(v, depth + 1)
+            elif isinstance(obj, list):
+                for v in obj:
+                    walk(v, depth + 1)
+        walk(next_data)
 
-            course = (obj.get("course") or "").strip()
-            if not _is_uk_or_ire_course(course):
-                continue
+    if out:
+        out.sort()
+        return out
 
-            t = (obj.get("time") or "").strip()
-            if not t:
-                continue
+    # Fallback: extract from racecard URLs and nearby times in HTML
+    url_pattern = re.compile(r'https://www\.racingpost\.com/racecards/\d+/[^/"]+/\d{4}-\d{2}-\d{2}/\d+')
+    time_pattern = re.compile(r'\b(\d{2}:\d{2})\b')
+
+    urls = url_pattern.findall(html)
+    times = time_pattern.findall(html)
+
+    # Pair URLs with times by position in HTML
+    url_positions = [(m.start(), m.group()) for m in url_pattern.finditer(html)]
+    time_positions = [(m.start(), m.group()) for m in time_pattern.finditer(html)]
+
+    for url_pos, url in url_positions:
+        course = _course_from_url(url)
+        if not _is_uk_or_ire_course(course):
+            continue
+        # Find closest time before this URL
+        best_time = None
+        best_dist = 99999
+        for t_pos, t_str in time_positions:
+            if t_pos < url_pos:
+                dist = url_pos - t_pos
+                if dist < best_dist and dist < 2000:
+                    best_dist = dist
+                    best_time = t_str
+        if best_time:
             try:
-                dt = _parse_iso8601(t)
+                h, m = best_time.split(":")
+                dt = datetime(
+                    int(date_yyyy_mm_dd[:4]),
+                    int(date_yyyy_mm_dd[5:7]),
+                    int(date_yyyy_mm_dd[8:10]),
+                    int(h), int(m),
+                    tzinfo=timezone.utc,
+                )
             except Exception:
                 continue
             key = dt.isoformat()
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(dt)
+            if key not in seen:
+                seen.add(key)
+                out.append(dt)
 
     out.sort()
     return out
@@ -219,9 +293,9 @@ def main() -> None:
 
     y, m, d = date_yyyy_mm_dd.split("-")
 
-    runners_jsonl = os.environ.get(
-        "RACECARD_RUNNERS_JSONL",
-        f"/data/{y}/{m}/{d}/racingpost-racecards-{date_yyyy_mm_dd}-runners.jsonl",
+    time_order_html = os.environ.get(
+        "TIME_ORDER_HTML",
+        f"/data/{y}/{m}/{d}/racingpost-racecards-{date_yyyy_mm_dd}.html",
     )
 
     cluster_arn = _env("ECS_CLUSTER_ARN")
@@ -231,9 +305,9 @@ def main() -> None:
 
     taskdef_pipeline = _env("ECS_TASKDEF_PIPELINE_ARN")
 
-    times = _load_uk_ire_race_times(runners_jsonl)
+    times = _extract_race_times_from_time_order_html(time_order_html, date_yyyy_mm_dd)
     if not times:
-        raise RuntimeError(f"no UK/IRE race times found in {runners_jsonl}")
+        raise RuntimeError(f"no UK/IRE race times found in {time_order_html}")
 
     print(f"found {len(times)} unique UK/IRE race times")
 
