@@ -320,6 +320,10 @@ fn sql_string_literal(s: &str) -> String {
 }
 
 fn parse_one_racecard_html(html: &str) -> anyhow::Result<(RaceMeta, Vec<RunnerRec>)> {
+    // Extract betting forecast odds (horse_name_lower -> fractional odds e.g. "4/1").
+    // Odds are displayed as a grouped forecast, not per-runner row.
+    let forecast_odds = extract_betting_forecast_odds(html);
+
     // Prefer structured Next.js data if available, but fall back to HTML parsing.
     if let Some(next_data) = extract_next_data_json(html) {
         if let Ok(v) = serde_json::from_str::<Value>(&next_data) {
@@ -364,6 +368,19 @@ fn parse_one_racecard_html(html: &str) -> anyhow::Result<(RaceMeta, Vec<RunnerRe
                     }
                 }
 
+                // Backfill odds from betting forecast for runners missing them.
+                if !forecast_odds.is_empty() {
+                    for r in runners.iter_mut() {
+                        if r.odds.as_deref().unwrap_or("").is_empty() {
+                            if let Some(h) = r.horse.as_deref() {
+                                if let Some(o) = forecast_odds.get(&h.trim().to_lowercase()) {
+                                    r.odds = Some(o.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+
                 return Ok((meta, runners));
             }
         }
@@ -380,7 +397,19 @@ fn parse_one_racecard_html(html: &str) -> anyhow::Result<(RaceMeta, Vec<RunnerRe
         meta.race_name = extract_race_name_from_title(html);
     }
 
-    let runners = extract_runners_from_html(html);
+    let mut runners = extract_runners_from_html(html);
+    // Backfill odds from betting forecast for HTML-parsed runners.
+    if !forecast_odds.is_empty() {
+        for r in runners.iter_mut() {
+            if r.odds.as_deref().unwrap_or("").is_empty() {
+                if let Some(h) = r.horse.as_deref() {
+                    if let Some(o) = forecast_odds.get(&h.trim().to_lowercase()) {
+                        r.odds = Some(o.clone());
+                    }
+                }
+            }
+        }
+    }
     if runners.is_empty() {
         anyhow::bail!("no runners found")
     }
@@ -561,6 +590,94 @@ fn write_racecard_parquet(out_path: &str, rows: &[RacecardRow]) -> anyhow::Resul
     writer.write(&batch).with_context(|| "write parquet")?;
     writer.close().with_context(|| "close parquet")?;
     Ok(())
+}
+
+fn extract_betting_forecast_odds(html: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let group_marker = "Group__BettingForecast";
+    let horse_marker = "Link__BettingForecastHorse";
+    let mut pos = 0;
+
+    while let Some(rel) = html[pos..].find(group_marker) {
+        let gstart = pos + rel;
+
+        // Skip to the '>' closing this group element's opening tag
+        let Some(gt_rel) = html[gstart..].find('>') else {
+            pos = gstart + group_marker.len();
+            continue;
+        };
+        let content_start = gstart + gt_rel + 1;
+
+        // Group ends at the next group marker (or 2000 chars ahead as a safety limit)
+        let gend = html[gstart + group_marker.len()..]
+            .find(group_marker)
+            .map(|r| gstart + group_marker.len() + r)
+            .unwrap_or_else(|| html.len().min(content_start + 2000));
+        let gend = gend.max(content_start);
+        let group = &html[content_start..gend];
+
+        // First text inside the group is the fractional odds (e.g. "4/1", "13/2")
+        if let Some(frac) = extract_first_inner_text(group) {
+            let frac = frac.trim();
+            if frac.contains('/') || frac.eq_ignore_ascii_case("evs") || frac.eq_ignore_ascii_case("evens") {
+                if let Some(decimal) = fractional_to_decimal(frac) {
+                    let mut hpos = 0;
+                    while let Some(hrel) = group[hpos..].find(horse_marker) {
+                        let h = hpos + hrel + horse_marker.len();
+                        if let Some(name) = extract_inner_link_text(&group[h..]) {
+                            let name = name.trim().to_string();
+                            if !name.is_empty() {
+                                map.insert(name.to_lowercase(), decimal.clone());
+                            }
+                        }
+                        hpos = h;
+                    }
+                }
+            }
+        }
+
+        pos = gstart + group_marker.len();
+    }
+
+    map
+}
+
+// Converts fractional odds (e.g. "4/1", "13/2", "EVS") to decimal string (e.g. "5.00").
+fn fractional_to_decimal(frac: &str) -> Option<String> {
+    let frac = frac.trim();
+    if frac.eq_ignore_ascii_case("evs") || frac.eq_ignore_ascii_case("evens") {
+        return Some("2.00".to_string());
+    }
+    let (num_str, den_str) = frac.split_once('/')?;
+    let num: f64 = num_str.trim().parse().ok()?;
+    let den: f64 = den_str.trim().parse().ok()?;
+    if den == 0.0 { return None; }
+    Some(format!("{:.2}", num / den + 1.0))
+}
+
+// Returns the text content of the first element found in s.
+// Handles either direct text or a single level of nesting: <tag>TEXT</tag>
+fn extract_first_inner_text(s: &str) -> Option<String> {
+    let gt = s.find('>')?;
+    let rest = &s[gt + 1..];
+    if rest.starts_with('<') {
+        let gt2 = rest.find('>')?;
+        let inner = &rest[gt2 + 1..];
+        let end = inner.find('<')?;
+        let t = inner[..end].trim();
+        if t.is_empty() { None } else { Some(t.to_string()) }
+    } else {
+        let end = rest.find('<')?;
+        let t = rest[..end].trim();
+        if t.is_empty() { None } else { Some(t.to_string()) }
+    }
+}
+
+// Extracts the horse name from anchor content after a Link__BettingForecastHorse marker.
+fn extract_inner_link_text(rest: &str) -> Option<String> {
+    let gt1 = rest.find('>')?;
+    let inner = &rest[gt1 + 1..];
+    extract_first_inner_text(inner)
 }
 
 fn extract_next_data_json(html: &str) -> Option<String> {
