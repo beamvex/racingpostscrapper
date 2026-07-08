@@ -50,6 +50,23 @@ def _fmt_prob(val) -> str:
         return '—'
 
 
+def _bookie_prob(bookie_odds) -> float | None:
+    try:
+        f = float(bookie_odds)
+        return (1.0 / f) if f > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _edge_cell(edge: float | None) -> str:
+    if edge is None:
+        return '<td class="text-end">—</td>'
+    pct = edge * 100
+    cls = 'text-success fw-semibold' if pct > 0 else 'text-danger'
+    sign = '+' if pct > 0 else ''
+    return f'<td class="text-end {cls}">{sign}{pct:.1f}pp</td>'
+
+
 def _build_html(date_str: str, rows: list[dict]) -> str:
     races: dict[tuple, list[dict]] = {}
     race_order: list[tuple] = []
@@ -103,6 +120,10 @@ def _build_html(date_str: str, rows: list[dict]) -> str:
         if going.strip():
             out.append(f'<p class="text-muted small mb-2">Going: {_esc(going)}</p>')
 
+        total_model = sum((r.get('prob') or 0.0) for r in runners)
+        total_bookie = sum(_bookie_prob(r.get('bookie_odds')) or 0.0 for r in runners)
+        total_edge = total_model - total_bookie if total_bookie > 0 else None
+
         out.append('<div class="table-responsive">')
         out.append('<table class="table table-sm table-hover align-middle">')
         out.append('<thead><tr>'
@@ -110,21 +131,45 @@ def _build_html(date_str: str, rows: list[dict]) -> str:
                    '<th>Jockey</th>'
                    '<th>Trainer</th>'
                    '<th class="text-end">Bookie odds</th>'
+                   '<th class="text-end">Bookie prob</th>'
                    '<th class="text-end">Model prob</th>'
                    '<th class="text-end">Fair odds</th>'
+                   '<th class="text-end">Edge</th>'
                    '</tr></thead><tbody>')
         for r in runners:
+            bp = _bookie_prob(r.get('bookie_odds'))
+            mp = r.get('prob')
+            edge = (float(mp) - bp) if (bp is not None and mp is not None) else None
             out.append(
                 f'<tr>'
                 f'<td>{_esc(r.get("horse",""))}</td>'
                 f'<td>{_esc(r.get("jockey",""))}</td>'
                 f'<td>{_esc(r.get("trainer",""))}</td>'
                 f'<td class="text-end">{_fmt_odds(r.get("bookie_odds"))}</td>'
-                f'<td class="text-end">{_fmt_prob(r.get("prob"))}</td>'
+                f'<td class="text-end">{_fmt_prob(bp)}</td>'
+                f'<td class="text-end">{_fmt_prob(mp)}</td>'
                 f'<td class="text-end">{_fmt_odds(r.get("fair_odds"))}</td>'
+                + _edge_cell(edge) +
                 f'</tr>'
             )
-        out.append('</tbody></table></div>')
+        if total_edge is None:
+            edge_total_cell = '<td class="text-end fw-bold border-top">—</td>'
+        else:
+            pct = total_edge * 100
+            cls = 'text-success' if pct > 0 else 'text-danger'
+            sign = '+' if pct > 0 else ''
+            edge_total_cell = (f'<td class="text-end fw-bold border-top {cls}">'
+                               f'{sign}{pct:.1f}pp</td>')
+        out.append(
+            f'</tbody><tfoot><tr>'
+            f'<td colspan="3" class="fw-bold border-top">Totals</td>'
+            f'<td class="text-end border-top">—</td>'
+            f'<td class="text-end fw-bold border-top">{_fmt_prob(total_bookie)}</td>'
+            f'<td class="text-end fw-bold border-top">{_fmt_prob(total_model)}</td>'
+            f'<td class="text-end border-top">—</td>'
+            + edge_total_cell +
+            f'</tr></tfoot></table></div>'
+        )
         out.append('</div></div></div>')
 
     out.append('</div>')
