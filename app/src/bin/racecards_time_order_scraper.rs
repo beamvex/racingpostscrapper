@@ -44,26 +44,44 @@ async fn main() -> anyhow::Result<()> {
     // Filter out races that have already started when scraping today's card
     let now_utc = Utc::now();
     let today_london = now_utc.with_timezone(&London).format("%Y-%m-%d").to_string();
+    eprintln!("racecards: results_date={} today_london={} now_london={}",
+        results_date, today_london,
+        now_utc.with_timezone(&London).format("%H:%M"));
     let urls_to_download = if results_date == today_london {
         let race_time_map = build_race_time_map(&html, &results_date);
         eprintln!("racecards: race time map has {} entries", race_time_map.len());
+        // Dump first 10 map entries so we can diagnose ID mismatches
+        for (k, v) in race_time_map.iter().take(10) {
+            eprintln!("  map entry: id={} time={} London", k, v.with_timezone(&London).format("%H:%M"));
+        }
         let filtered: Vec<String> = urls
             .iter()
             .filter(|url| {
                 let race_id = parse_racecard_detail_url(url)
                     .map(|i| i.race_id)
                     .unwrap_or_default();
-                if let Some(&race_time) = race_time_map.get(&race_id) {
-                    if race_time < now_utc {
+                match race_time_map.get(&race_id) {
+                    None => {
+                        eprintln!("racecards: no time found for race_id={} url={} — keeping", race_id, url);
+                        true
+                    }
+                    Some(&race_time) if race_time < now_utc => {
                         eprintln!(
                             "racecards: skipping past race id={} time={} London",
                             race_id,
                             race_time.with_timezone(&London).format("%H:%M"),
                         );
-                        return false;
+                        false
+                    }
+                    Some(&race_time) => {
+                        eprintln!(
+                            "racecards: keeping future race id={} time={} London",
+                            race_id,
+                            race_time.with_timezone(&London).format("%H:%M"),
+                        );
+                        true
                     }
                 }
-                true
             })
             .cloned()
             .collect();
@@ -234,6 +252,18 @@ fn walk_for_times(v: &serde_json::Value, map: &mut HashMap<String, DateTime<Utc>
     if let serde_json::Value::Object(obj) = v {
         let race_id = obj
             .get("raceId")
+            .or_else(|| {
+                // Only accept "id" when it looks like a race ID (large numeric, not a course no)
+                obj.get("id").filter(|v| {
+                    if let serde_json::Value::Number(n) = v {
+                        n.as_u64().map_or(false, |n| n > 10_000)
+                    } else if let serde_json::Value::String(s) = v {
+                        s.parse::<u64>().map_or(false, |n| n > 10_000)
+                    } else {
+                        false
+                    }
+                })
+            })
             .and_then(|v| match v {
                 serde_json::Value::Number(n) => Some(n.to_string()),
                 serde_json::Value::String(s) => Some(s.clone()),
@@ -312,7 +342,7 @@ fn build_race_time_map_proximity(html: &str, results_date: &str) -> HashMap<Stri
             .and_then(filter_racecard_detail_url)
             .and_then(|u| parse_racecard_detail_url(&u));
         if let Some(info) = info {
-            let search_start = url_pos.saturating_sub(500);
+            let search_start = url_pos.saturating_sub(2000);
             if let Some(&(_, h, m)) = times.iter()
                 .filter(|(pos, _, _)| *pos >= search_start && *pos < url_pos)
                 .last()
