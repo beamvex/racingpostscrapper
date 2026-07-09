@@ -140,8 +140,7 @@ def _build_html(date_str: str, rows: list[dict], run_dropdown: str = '') -> str:
         out.append(run_dropdown)
     out.append('<hr class="my-3">')
 
-    out.append('<div class="accordion" id="racesAccordion">')
-    for idx, key in enumerate(race_order):
+    for key in race_order:
         course, time_str, race_name, going = key
         runners = sorted(races[key], key=lambda r: -(r.get('prob') or 0))
         hhmm = _hhmm(time_str)
@@ -149,23 +148,7 @@ def _build_html(date_str: str, rows: list[dict], run_dropdown: str = '') -> str:
         if race_name.strip():
             heading += f' — {_esc(race_name)}'
 
-        collapse_id = f'collapse{idx}'
-        heading_id = f'heading{idx}'
-        expanded = 'true' if idx == 0 else 'false'
-        show_cls = ' show' if idx == 0 else ''
-        collapsed_cls = '' if idx == 0 else ' collapsed'
-
-        out.append('<div class="accordion-item">')
-        out.append(f'<h2 class="accordion-header" id="{heading_id}">')
-        out.append(f'<button class="accordion-button{collapsed_cls}" type="button" '
-                   f'data-bs-toggle="collapse" data-bs-target="#{collapse_id}" '
-                   f'aria-expanded="{expanded}" aria-controls="{collapse_id}">')
-        out.append(heading)
-        out.append('</button></h2>')
-        out.append(f'<div id="{collapse_id}" class="accordion-collapse collapse{show_cls}" '
-                   f'aria-labelledby="{heading_id}" data-bs-parent="#racesAccordion">')
-        out.append('<div class="accordion-body">')
-
+        out.append(f'<h4 class="mt-4 mb-1">{heading}</h4>')
         if going.strip():
             out.append(f'<p class="text-muted small mb-2">Going: {_esc(going)}</p>')
 
@@ -219,11 +202,6 @@ def _build_html(date_str: str, rows: list[dict], run_dropdown: str = '') -> str:
             + edge_total_cell +
             f'</tr></tfoot></table></div>'
         )
-        out.append('</div></div></div>')
-
-    out.append('</div>')
-    out.append('<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" '
-               'crossorigin="anonymous"></script>')
     out.append('</div></body></html>')
     return '\n'.join(out)
 
