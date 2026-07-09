@@ -175,7 +175,8 @@ fi
 # ============================================================
 # STEP 9: Compute probabilities and write parquet report
 # ============================================================
-PROBABILITIES_PARQUET="${OUT_DIR}/racecard-probabilities-${RESULTS_DATE_USED}.parquet"
+RUN_TS=$(date -u +%H%M%S)
+PROBABILITIES_PARQUET="${OUT_DIR}/racecard-probabilities-${RESULTS_DATE_USED}-${RUN_TS}.parquet"
 echo "=== step 9: computing probabilities ==="
 /app/target/release/today_first_race_table \
   --in="${RUNNERS_OUT}" \
