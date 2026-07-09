@@ -148,16 +148,21 @@ def _build_html(date_str: str, rows: list[dict], run_dropdown: str = '') -> str:
         if race_name.strip():
             heading += f' — {_esc(race_name)}'
 
-        out.append(f'<h4 class="mt-4 mb-1">{heading}</h4>')
-        if going.strip():
-            out.append(f'<p class="text-muted small mb-2">Going: {_esc(going)}</p>')
+        subtitle = f'Going: {_esc(going)}' if going.strip() else ''
+        out.append('<div class="card mt-4">')
+        out.append('<div class="card-header">')
+        out.append(f'<h5 class="card-title mb-0">{heading}</h5>')
+        if subtitle:
+            out.append(f'<small class="text-muted">{subtitle}</small>')
+        out.append('</div>')
+        out.append('<div class="card-body p-0">')
 
         total_model = sum((r.get('prob') or 0.0) for r in runners)
         total_bookie = sum(_bookie_prob(r.get('bookie_odds')) or 0.0 for r in runners)
         total_edge = total_model - total_bookie if total_bookie > 0 else None
 
         out.append('<div class="table-responsive">')
-        out.append('<table class="table table-sm table-hover align-middle">')
+        out.append('<table class="table table-sm table-striped table-hover align-middle mb-0">')
         out.append('<thead><tr>'
                    '<th>Horse</th>'
                    '<th>Jockey</th>'
@@ -202,6 +207,7 @@ def _build_html(date_str: str, rows: list[dict], run_dropdown: str = '') -> str:
             + edge_total_cell +
             f'</tr></tfoot></table></div>'
         )
+        out.append('</div></div>')
     out.append('</div></body></html>')
     return '\n'.join(out)
 
