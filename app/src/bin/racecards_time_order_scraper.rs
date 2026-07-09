@@ -1,5 +1,7 @@
 use anyhow::Context;
-use std::collections::HashSet;
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono_tz::Europe::London;
+use std::collections::{HashMap, HashSet};
 use tokio::time::{timeout, Duration};
 
 #[tokio::main]
@@ -39,13 +41,50 @@ async fn main() -> anyhow::Result<()> {
     eprintln!("racecards: writing {} urls to {}", urls.len(), urls_path);
     std::fs::write(&urls_path, urls.join("\n")).with_context(|| format!("write {urls_path}"))?;
 
+    // Filter out races that have already started when scraping today's card
+    let now_utc = Utc::now();
+    let today_london = now_utc.with_timezone(&London).format("%Y-%m-%d").to_string();
+    let urls_to_download = if results_date == today_london {
+        let race_time_map = build_race_time_map(&html);
+        eprintln!("racecards: race time map has {} entries", race_time_map.len());
+        let filtered: Vec<String> = urls
+            .iter()
+            .filter(|url| {
+                let race_id = parse_racecard_detail_url(url)
+                    .map(|i| i.race_id)
+                    .unwrap_or_default();
+                if let Some(&race_time) = race_time_map.get(&race_id) {
+                    if race_time < now_utc {
+                        eprintln!(
+                            "racecards: skipping past race id={} time={} London",
+                            race_id,
+                            race_time.with_timezone(&London).format("%H:%M"),
+                        );
+                        return false;
+                    }
+                }
+                true
+            })
+            .cloned()
+            .collect();
+        eprintln!(
+            "racecards: {} of {} urls are future races",
+            filtered.len(),
+            urls.len(),
+        );
+        filtered
+    } else {
+        eprintln!("racecards: historical date {}, keeping all {} urls", results_date, urls.len());
+        urls.clone()
+    };
+
     if time_order_only {
         eprintln!("racecards: --time-order-only, skipping racecard downloads");
     } else {
         let cards_dir = format!("{out_base_dir}racingpost-racecards-{results_date}-racecards-html");
         std::fs::create_dir_all(&cards_dir).with_context(|| format!("create {cards_dir}"))?;
-        eprintln!("racecards: downloading {} racecards into {}", urls.len(), cards_dir);
-        let (downloaded, failed) = download_racecards_html(&mut browser, &urls, &cards_dir).await?;
+        eprintln!("racecards: downloading {} racecards into {}", urls_to_download.len(), cards_dir);
+        let (downloaded, failed) = download_racecards_html(&mut browser, &urls_to_download, &cards_dir).await?;
         eprintln!("racecards: downloaded {} (failed {})", downloaded, failed);
     }
 
@@ -161,6 +200,83 @@ fn parse_racecard_detail_url(url: &str) -> Option<RacecardInfo> {
         race_date: parts[3].to_string(),
         race_id: parts[4].to_string(),
     })
+}
+
+fn parse_race_time(s: &str) -> Option<DateTime<Utc>> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    // ISO 8601 with offset or Z
+    let normalised = if s.ends_with('Z') {
+        format!("{}+00:00", &s[..s.len() - 1])
+    } else {
+        s.to_string()
+    };
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&normalised) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    // Naive datetime — treat as Europe/London
+    for fmt in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"] {
+        if let Ok(ndt) = NaiveDateTime::parse_from_str(s, fmt) {
+            if let Some(dt) = London.from_local_datetime(&ndt).earliest() {
+                return Some(dt.with_timezone(&Utc));
+            }
+        }
+    }
+    None
+}
+
+fn walk_for_times(v: &serde_json::Value, map: &mut HashMap<String, DateTime<Utc>>, depth: u32) {
+    if depth > 30 {
+        return;
+    }
+    if let serde_json::Value::Object(obj) = v {
+        let race_id = obj
+            .get("raceId")
+            .or_else(|| obj.get("racecard"))
+            .and_then(|v| match v {
+                serde_json::Value::Number(n) => Some(n.to_string()),
+                serde_json::Value::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .filter(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()));
+        let time_str = obj
+            .get("raceTime")
+            .or_else(|| obj.get("offTime"))
+            .or_else(|| obj.get("startTime"))
+            .and_then(|v| v.as_str());
+        if let (Some(id), Some(ts)) = (race_id, time_str) {
+            if let Some(dt) = parse_race_time(ts) {
+                map.entry(id).or_insert(dt);
+            }
+        }
+        for child in obj.values() {
+            walk_for_times(child, map, depth + 1);
+        }
+    } else if let serde_json::Value::Array(arr) = v {
+        for item in arr {
+            walk_for_times(item, map, depth + 1);
+        }
+    }
+}
+
+fn build_race_time_map(html: &str) -> HashMap<String, DateTime<Utc>> {
+    let mut map = HashMap::new();
+    let marker = r#"<script id="__NEXT_DATA__" type="application/json">"#;
+    let start = match html.find(marker) {
+        Some(i) => i + marker.len(),
+        None => return map,
+    };
+    let end = match html[start..].find("</script>") {
+        Some(i) => start + i,
+        None => return map,
+    };
+    match serde_json::from_str::<serde_json::Value>(&html[start..end]) {
+        Ok(json) => walk_for_times(&json, &mut map, 0),
+        Err(e) => eprintln!("racecards: failed to parse __NEXT_DATA__: {}", e),
+    }
+    map
 }
 
 fn extract_racecard_urls(html: &str) -> Vec<String> {
