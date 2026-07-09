@@ -3,6 +3,9 @@ import os
 import re
 import subprocess
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+TZ_LONDON = ZoneInfo("Europe/London")
 
 
 def _env(name: str) -> str:
@@ -20,7 +23,10 @@ def _parse_iso8601(s: str) -> datetime:
     # Common forms seen in the scraper output.
     if t.endswith("Z"):
         t = t[:-1] + "+00:00"
-    return datetime.fromisoformat(t).astimezone(timezone.utc)
+    dt = datetime.fromisoformat(t)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=TZ_LONDON)
+    return dt.astimezone(timezone.utc)
 
 
 def _cron_expr(dt: datetime) -> str:
@@ -205,8 +211,8 @@ def _try_parse_time(time_str: str, date_yyyy_mm_dd: str) -> datetime | None:
                 int(date_yyyy_mm_dd[5:7]),
                 int(date_yyyy_mm_dd[8:10]),
                 int(m.group(1)), int(m.group(2)),
-                tzinfo=timezone.utc,
-            )
+                tzinfo=TZ_LONDON,
+            ).astimezone(timezone.utc)
         except Exception:
             pass
     return None
@@ -309,8 +315,8 @@ def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: st
                     int(date_yyyy_mm_dd[5:7]),
                     int(date_yyyy_mm_dd[8:10]),
                     int(h), int(m),
-                    tzinfo=timezone.utc,
-                )
+                    tzinfo=TZ_LONDON,
+                ).astimezone(timezone.utc)
             except Exception:
                 continue
             key = dt.isoformat()
@@ -325,7 +331,7 @@ def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: st
 def main() -> None:
     date_yyyy_mm_dd = os.environ.get("RESULTS_DATE", "").strip()
     if not date_yyyy_mm_dd:
-        date_yyyy_mm_dd = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date_yyyy_mm_dd = datetime.now(TZ_LONDON).strftime("%Y-%m-%d")
 
     y, m, d = date_yyyy_mm_dd.split("-")
 
