@@ -1,5 +1,5 @@
 use anyhow::Context;
-use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Europe::London;
 use std::collections::{HashMap, HashSet};
 use tokio::time::{timeout, Duration};
@@ -21,7 +21,7 @@ async fn main() -> anyhow::Result<()> {
 
     let results_date = results_date
         .or_else(|| std::env::var("RESULTS_DATE").ok())
-        .unwrap_or_else(racingpost_scraper::utils::current_utc_date_yyyy_mm_dd);
+        .unwrap_or_else(|| Utc::now().with_timezone(&London).format("%Y-%m-%d").to_string());
 
     let target_url = "https://www.racingpost.com/racecards/time-order/";
     eprintln!("racecards: target_url={target_url}");
@@ -45,7 +45,7 @@ async fn main() -> anyhow::Result<()> {
     let now_utc = Utc::now();
     let today_london = now_utc.with_timezone(&London).format("%Y-%m-%d").to_string();
     let urls_to_download = if results_date == today_london {
-        let race_time_map = build_race_time_map(&html);
+        let race_time_map = build_race_time_map(&html, &results_date);
         eprintln!("racecards: race time map has {} entries", race_time_map.len());
         let filtered: Vec<String> = urls
             .iter()
@@ -234,7 +234,6 @@ fn walk_for_times(v: &serde_json::Value, map: &mut HashMap<String, DateTime<Utc>
     if let serde_json::Value::Object(obj) = v {
         let race_id = obj
             .get("raceId")
-            .or_else(|| obj.get("racecard"))
             .and_then(|v| match v {
                 serde_json::Value::Number(n) => Some(n.to_string()),
                 serde_json::Value::String(s) => Some(s.clone()),
@@ -261,20 +260,92 @@ fn walk_for_times(v: &serde_json::Value, map: &mut HashMap<String, DateTime<Utc>
     }
 }
 
-fn build_race_time_map(html: &str) -> HashMap<String, DateTime<Utc>> {
+fn extract_hhmm_positions(html: &str) -> Vec<(usize, u32, u32)> {
+    let bytes = html.as_bytes();
+    let mut out = Vec::new();
+    let len = bytes.len();
+    let mut i = 0;
+    while i + 4 < len {
+        if bytes[i].is_ascii_digit() && bytes[i+1].is_ascii_digit()
+            && bytes[i+2] == b':'
+            && bytes[i+3].is_ascii_digit() && bytes[i+4].is_ascii_digit()
+        {
+            let h = (bytes[i] - b'0') as u32 * 10 + (bytes[i+1] - b'0') as u32;
+            let m = (bytes[i+3] - b'0') as u32 * 10 + (bytes[i+4] - b'0') as u32;
+            if h < 24 && m < 60 {
+                let before_ok = i == 0 || !(bytes[i-1].is_ascii_digit() || bytes[i-1] == b'-');
+                let after_ok = i + 5 >= len || !(bytes[i+5].is_ascii_digit() || bytes[i+5] == b'.');
+                if before_ok && after_ok {
+                    out.push((i, h, m));
+                }
+            }
+            i += 5;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+fn build_race_time_map_proximity(html: &str, results_date: &str) -> HashMap<String, DateTime<Utc>> {
+    let mut map = HashMap::new();
+    let parts: Vec<&str> = results_date.splitn(3, '-').collect();
+    if parts.len() != 3 { return map; }
+    let (y, mo, d) = match (parts[0].parse::<i32>(), parts[1].parse::<u32>(), parts[2].parse::<u32>()) {
+        (Ok(y), Ok(mo), Ok(d)) => (y, mo, d),
+        _ => return map,
+    };
+    let naive_date = match NaiveDate::from_ymd_opt(y, mo, d) {
+        Some(nd) => nd,
+        None => return map,
+    };
+    let times = extract_hhmm_positions(html);
+    let mut url_start = 0;
+    while let Some(rel) = html[url_start..].find("/racecards/") {
+        let url_pos = url_start + rel;
+        let url_end = html[url_pos..]
+            .find(|c: char| c == '"' || c == '\'' || c.is_whitespace() || c == '<' || c == '>')
+            .map(|r| url_pos + r)
+            .unwrap_or(html.len());
+        let raw = &html[url_pos..url_end];
+        let info = normalize_racecards_url(raw)
+            .and_then(filter_racecard_detail_url)
+            .and_then(|u| parse_racecard_detail_url(&u));
+        if let Some(info) = info {
+            let search_start = url_pos.saturating_sub(500);
+            if let Some(&(_, h, m)) = times.iter()
+                .filter(|(pos, _, _)| *pos >= search_start && *pos < url_pos)
+                .last()
+            {
+                if let Some(ndt) = naive_date.and_hms_opt(h, m, 0) {
+                    if let Some(dt) = London.from_local_datetime(&ndt).earliest() {
+                        map.entry(info.race_id).or_insert_with(|| dt.with_timezone(&Utc));
+                    }
+                }
+            }
+        }
+        url_start = if url_end > url_start { url_end } else { url_start + 1 };
+    }
+    eprintln!("racecards: proximity time map has {} entries", map.len());
+    map
+}
+
+fn build_race_time_map(html: &str, results_date: &str) -> HashMap<String, DateTime<Utc>> {
     let mut map = HashMap::new();
     let marker = r#"<script id="__NEXT_DATA__" type="application/json">"#;
-    let start = match html.find(marker) {
-        Some(i) => i + marker.len(),
-        None => return map,
-    };
-    let end = match html[start..].find("</script>") {
-        Some(i) => start + i,
-        None => return map,
-    };
-    match serde_json::from_str::<serde_json::Value>(&html[start..end]) {
-        Ok(json) => walk_for_times(&json, &mut map, 0),
-        Err(e) => eprintln!("racecards: failed to parse __NEXT_DATA__: {}", e),
+    if let Some(start) = html.find(marker) {
+        let start = start + marker.len();
+        if let Some(rel_end) = html[start..].find("</script>") {
+            match serde_json::from_str::<serde_json::Value>(&html[start..start + rel_end]) {
+                Ok(json) => walk_for_times(&json, &mut map, 0),
+                Err(e) => eprintln!("racecards: failed to parse __NEXT_DATA__: {}", e),
+            }
+        }
+    }
+    eprintln!("racecards: JSON time map has {} entries", map.len());
+    if map.is_empty() {
+        eprintln!("racecards: falling back to proximity time extraction");
+        map = build_race_time_map_proximity(html, results_date);
     }
     map
 }
