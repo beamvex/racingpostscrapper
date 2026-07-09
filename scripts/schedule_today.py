@@ -359,14 +359,17 @@ def main() -> None:
     if deleted:
         print(f"cleaned up {deleted} old rule(s)")
 
+    def _lon(dt: datetime) -> datetime:
+        return dt.astimezone(TZ_LONDON)
+
     # Schedule pipeline 10 mins before each race
     for dt in times:
         dt_pre = dt - timedelta(minutes=10)
-        stamp = dt.strftime("%Y%m%d-%H%M")
+        stamp = _lon(dt).strftime("%Y%m%d-%H%M")
         rule_name = f"rps-pipeline-pre-{stamp}"
 
         if _rule_exists(rule_name):
-            print(f"  skip pre-race  {dt_pre.strftime('%H:%M')}  (rule {rule_name} already exists)")
+            print(f"  skip pre-race  {_lon(dt_pre).strftime('%H:%M')} London  (rule {rule_name} already exists)")
             continue
         _put_rule(rule_name, _cron_expr(dt_pre))
         _put_target(
@@ -378,16 +381,18 @@ def main() -> None:
             subnets_csv=subnets_csv,
             security_groups_csv=security_groups_csv,
         )
-        print(f"  scheduled pre-race  {dt_pre.strftime('%H:%M')}  for race at {dt.strftime('%H:%M')}")
+        print(f"  scheduled pre-race  {_lon(dt_pre).strftime('%H:%M')} London"
+              f"  (race at {_lon(dt).strftime('%H:%M')} London"
+              f" / cron UTC {_cron_expr(dt_pre)})")
 
     # Schedule pipeline 30 mins after the last race
     last_dt = times[-1]
     dt_post = last_dt + timedelta(minutes=30)
-    stamp = last_dt.strftime("%Y%m%d-%H%M")
+    stamp = _lon(last_dt).strftime("%Y%m%d-%H%M")
     rule_name = f"rps-pipeline-post-{stamp}"
 
     if _rule_exists(rule_name):
-        print(f"  skip post-race {dt_post.strftime('%H:%M')}  (rule {rule_name} already exists)")
+        print(f"  skip post-race {_lon(dt_post).strftime('%H:%M')} London  (rule {rule_name} already exists)")
     else:
         _put_rule(rule_name, _cron_expr(dt_post))
         _put_target(
@@ -399,7 +404,9 @@ def main() -> None:
             subnets_csv=subnets_csv,
             security_groups_csv=security_groups_csv,
         )
-        print(f"  scheduled post-race {dt_post.strftime('%H:%M')}  (30 min after last race at {last_dt.strftime('%H:%M')})")
+        print(f"  scheduled post-race {_lon(dt_post).strftime('%H:%M')} London"
+              f"  (30 min after last race at {_lon(last_dt).strftime('%H:%M')} London"
+              f" / cron UTC {_cron_expr(dt_post)})")
 
     print("done")
 
