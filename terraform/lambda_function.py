@@ -86,34 +86,57 @@ def _edge_cell(edge: float | None) -> str:
     return f'<td class="text-end {cls}">{sign}{pct:.1f}pp</td>'
 
 
-def _build_run_dropdown(all_runs: list[dict], current_key: str,
-                        today_str: str, yesterday_str: str) -> str:
-    if len(all_runs) <= 1:
+def _run_url(run: dict) -> str:
+    ds, ts = run['date'], run['ts']
+    return f'/{ds}?run={ts}' if ts != '000000' else f'/{ds}'
+
+
+def _build_sidebar(all_runs: list[dict], current_key: str,
+                   today_str: str, yesterday_str: str) -> str:
+    if not all_runs:
         return ''
-    options = []
+    seen_dates: list[str] = []
+    by_date: dict[str, list[dict]] = {}
     for run in all_runs:
-        ds, ts = run['date'], run['ts']
+        ds = run['date']
+        if ds not in by_date:
+            by_date[ds] = []
+            seen_dates.append(ds)
+        by_date[ds].append(run)
+    out = []
+    out.append('<nav class="sticky-top" style="top:1rem">')
+    out.append('<p class="fw-semibold mb-1 small text-uppercase text-muted">Runs</p>')
+    for ds in seen_dates:
         if ds == today_str:
             day_label = 'Today'
         elif ds == yesterday_str:
             day_label = 'Yesterday'
         else:
             day_label = ds
-        url = f'/{ds}?run={ts}' if ts != '000000' else f'/{ds}'
-        selected = ' selected' if run['key'] == current_key else ''
-        label = f"{day_label} {ts[:2]}:{ts[2:4]}"
-        options.append(f'<option value="{_esc(url)}"{selected}>{_esc(label)}</option>')
-    return (
-        '<div class="mb-3 d-flex align-items-center gap-2">'
-        '<label class="fw-semibold me-1" for="runSel">Run:</label>'
-        '<select id="runSel" class="form-select form-select-sm w-auto" '
-        'onchange="location.href=this.value">'
-        + ''.join(options)
-        + '</select></div>'
-    )
+        out.append(f'<p class="fw-semibold mb-1 mt-3 small text-muted">{_esc(day_label)}</p>')
+        out.append('<div class="list-group list-group-flush">')
+        for run in by_date[ds]:
+            ts = run['ts']
+            label = f"{ts[:2]}:{ts[2:4]}"
+            active = ' active' if run['key'] == current_key else ''
+            out.append(f'<a href="{_esc(_run_url(run))}" '
+                       f'class="list-group-item list-group-item-action py-1 small{active}">'
+                       f'{_esc(label)}</a>')
+        out.append('</div>')
+    out.append('</nav>')
+    return '\n'.join(out)
 
 
-def _build_html(date_str: str, rows: list[dict], run_dropdown: str = '') -> str:
+def _edge_key(r: dict) -> float:
+    bp = _bookie_prob(r.get('bookie_odds'))
+    mp = r.get('prob')
+    if bp is not None and mp is not None:
+        return float(mp) - bp
+    return float('-inf')
+
+
+def _build_html(date_str: str, rows: list[dict],
+                sidebar: str = '', latest_url: str = '/') -> str:
     races: dict[tuple, list[dict]] = {}
     race_order: list[tuple] = []
     for r in rows:
@@ -133,16 +156,22 @@ def _build_html(date_str: str, rows: list[dict], run_dropdown: str = '') -> str:
     out.append('<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" '
                'rel="stylesheet" crossorigin="anonymous">')
     out.append(f'<title>{_esc(date_str)} Probabilities</title>')
-    out.append('</head><body><div class="container my-4">')
-    out.append(f'<h1 class="h3 mb-1">Race Probabilities</h1>')
+    out.append('</head><body><div class="container-fluid my-4">')
+    out.append('<div class="row">')
+    if sidebar:
+        out.append('<div class="col-12 col-md-2 mb-3">')
+        out.append(sidebar)
+        out.append('</div>')
+        out.append('<div class="col-12 col-md-10">')
+    else:
+        out.append('<div class="col-12">')
+    out.append(f'<h1 class="h3 mb-1"><a href="{_esc(latest_url)}" class="text-decoration-none text-reset">Race Probabilities</a></h1>')
     out.append(f'<p class="text-muted">Date: {_esc(date_str)}</p>')
-    if run_dropdown:
-        out.append(run_dropdown)
     out.append('<hr class="my-3">')
 
     for key in race_order:
         course, time_str, race_name, going = key
-        runners = sorted(races[key], key=lambda r: -(r.get('prob') or 0))
+        runners = sorted(races[key], key=_edge_key, reverse=True)
         hhmm = _hhmm(time_str)
         heading = f'{_esc(hhmm)} — {_esc(course)}'
         if race_name.strip():
@@ -208,7 +237,7 @@ def _build_html(date_str: str, rows: list[dict], run_dropdown: str = '') -> str:
             f'</tr></tfoot></table></div>'
         )
         out.append('</div></div>')
-    out.append('</div></body></html>')
+    out.append('</div></div></div></body></html>')
     return '\n'.join(out)
 
 
@@ -253,8 +282,9 @@ def _fetch_and_render(bucket: str, y: str, m: str, d: str, date_str: str,
         cols = table.to_pydict()
         n = len(next(iter(cols.values()), []))
         row_list = [{col: cols[col][i] for col in cols} for i in range(n)]
-        dropdown = _build_run_dropdown(all_runs, key, today_str or date_str, yesterday_str)
-        html = _build_html(date_str, row_list, run_dropdown=dropdown)
+        latest_url = _run_url(all_runs[0]) if all_runs else f'/{date_str}'
+        sidebar = _build_sidebar(all_runs, key, today_str or date_str, yesterday_str)
+        html = _build_html(date_str, row_list, sidebar=sidebar, latest_url=latest_url)
     except Exception as e:
         return {
             'statusCode': 500,
