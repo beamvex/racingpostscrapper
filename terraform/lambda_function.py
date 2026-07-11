@@ -104,7 +104,7 @@ def _build_sidebar(all_runs: list[dict], current_key: str,
             seen_dates.append(ds)
         by_date[ds].append(run)
     out = []
-    out.append('<nav class="sticky-top" style="top:1rem">')
+    out.append('<nav class="sticky-top" style="top:1rem;max-height:calc(100vh - 2rem);overflow-y:auto">')
     out.append('<p class="fw-semibold mb-1 small text-uppercase text-muted">Runs</p>')
     for ds in seen_dates:
         if ds == today_str:
