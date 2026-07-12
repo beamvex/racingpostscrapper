@@ -91,54 +91,24 @@ def _cleanup_old_schedules(prefix: str, today_str: str) -> int:
 def _create_schedule(
     name: str,
     dt: datetime,
-    cluster_arn: str,
-    role_arn: str,
-    task_def_arn: str,
-    subnets_csv: str,
-    security_groups_csv: str,
+    lambda_arn: str,
     race_url: str | None = None,
 ) -> None:
     region = os.environ.get("AWS_REGION", "eu-west-2")
 
-    subnets = [s.strip() for s in subnets_csv.split(",") if s.strip()]
-    sgs = [s.strip() for s in security_groups_csv.split(",") if s.strip()]
-
-    if not subnets:
-        raise RuntimeError("no subnets configured")
-    if not sgs:
-        raise RuntimeError("no security groups configured")
-
-    ecs_params: dict = {
-        "TaskDefinitionArn": task_def_arn,
-        "TaskCount": 1,
-        "LaunchType": "FARGATE",
-        "PlatformVersion": "LATEST",
-        "NetworkConfiguration": {
-            "awsvpcConfiguration": {
-                "Subnets": subnets,
-                "SecurityGroups": sgs,
-                "AssignPublicIp": "ENABLED",
-            }
-        },
-    }
-
-    if race_url:
-        ecs_params["TaskOverride"] = {
-            "ContainerOverrides": [
-                {
-                    "Name": "daily-pipeline",
-                    "Environment": [
-                        {"Name": "RACE_URL", "Value": race_url}
-                    ],
-                }
-            ]
-        }
-
+    # Build target for Lambda invocation
     target = json.dumps({
-        "Arn": cluster_arn,
-        "RoleArn": role_arn,
-        "EcsParameters": ecs_params,
+        "Arn": lambda_arn,
+        "RoleArn": f"arn:aws:iam::{_account_id()}:role/racingpost-scraper-lambda",
     })
+
+    # Pass race URL in the Lambda input
+    if race_url:
+        target = json.dumps({
+            "Arn": lambda_arn,
+            "RoleArn": f"arn:aws:iam::{_account_id()}:role/racingpost-scraper-lambda",
+            "Input": json.dumps({"race_url": race_url}),
+        })
 
     # EventBridge Scheduler uses at(yyyy-mm-ddThh:mm:ss) for one-time schedules (UTC)
     at_expr = dt.astimezone(timezone.utc).strftime("at(%Y-%m-%dT%H:%M:%S)")
@@ -155,6 +125,24 @@ def _create_schedule(
             "--region", region,
         ]
     )
+
+
+def _account_id() -> str:
+    """Extract AWS account ID from cluster ARN or environment."""
+    # Try to get from cluster ARN environment variable
+    cluster_arn = os.environ.get("ECS_CLUSTER_ARN", "")
+    if cluster_arn:
+        parts = cluster_arn.split(":")
+        if len(parts) >= 5:
+            return parts[4]
+    # Fallback to STS call
+    result = subprocess.run(
+        ["aws", "sts", "get-caller-identity", "--query", "Account", "--output", "text"],
+        capture_output=True,
+        text=True,
+        check=True
+    )
+    return result.stdout.strip()
 
 
 def _is_uk_or_ire_course(course: str) -> bool:
@@ -337,12 +325,7 @@ def main() -> None:
         f"/data/{y}/{m}/{d}/racingpost-racecards-{date_yyyy_mm_dd}.html",
     )
 
-    cluster_arn = _env("ECS_CLUSTER_ARN")
-    role_arn = _env("EVENTBRIDGE_ROLE_ARN")
-    subnets_csv = _env("ECS_SUBNETS")
-    security_groups_csv = _env("ECS_SECURITY_GROUPS")
-
-    taskdef_pipeline = _env("ECS_TASKDEF_PIPELINE_ARN")
+    lambda_arn = _env("STARTER_LAMBDA_ARN")
 
     times = _extract_race_times_from_time_order_html(time_order_html, date_yyyy_mm_dd)
     if not times:
@@ -371,11 +354,7 @@ def main() -> None:
         _create_schedule(
             name=schedule_name,
             dt=dt_pre,
-            cluster_arn=cluster_arn,
-            role_arn=role_arn,
-            task_def_arn=taskdef_pipeline,
-            subnets_csv=subnets_csv,
-            security_groups_csv=security_groups_csv,
+            lambda_arn=lambda_arn,
             race_url=url,
         )
         print(f"  scheduled pre-race  {_lon(dt_pre).strftime('%H:%M')} London"
@@ -395,11 +374,7 @@ def main() -> None:
         _create_schedule(
             name=schedule_name,
             dt=dt_post,
-            cluster_arn=cluster_arn,
-            role_arn=role_arn,
-            task_def_arn=taskdef_pipeline,
-            subnets_csv=subnets_csv,
-            security_groups_csv=security_groups_csv,
+            lambda_arn=lambda_arn,
         )
         print(f"  scheduled post-race {_lon(dt_post).strftime('%H:%M')} London"
               f"  (30 min after last race at {_lon(last_dt).strftime('%H:%M')} London"

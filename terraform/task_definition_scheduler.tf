@@ -31,24 +31,8 @@ resource "aws_ecs_task_definition" "scheduler" {
           value = aws_s3_bucket.scraper_data.bucket
         },
         {
-          name  = "ECS_CLUSTER_ARN"
-          value = aws_ecs_cluster.main.arn
-        },
-        {
-          name  = "EVENTBRIDGE_ROLE_ARN"
-          value = aws_iam_role.eventbridge_ecs_run_task.arn
-        },
-        {
-          name  = "ECS_SUBNETS"
-          value = "${aws_subnet.public_a.id},${aws_subnet.public_b.id}"
-        },
-        {
-          name  = "ECS_SECURITY_GROUPS"
-          value = aws_security_group.ecs_tasks.id
-        },
-        {
-          name  = "ECS_TASKDEF_PIPELINE_ARN"
-          value = aws_ecs_task_definition.daily_pipeline.arn
+          name  = "STARTER_LAMBDA_ARN"
+          value = aws_lambda_function.starter.arn
         },
       ]
 

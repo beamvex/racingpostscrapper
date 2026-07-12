@@ -123,3 +123,71 @@ output "probabilities_api_url" {
   value = aws_apigatewayv2_stage.probabilities.invoke_url
 }
 
+# --- Starter Lambda for EventBridge Scheduler ---
+
+data "archive_file" "starter_lambda_zip" {
+  type        = "zip"
+  source_file = "${path.module}/../lambda/starter_lambda.py"
+  output_path = "${path.module}/starter_lambda.zip"
+}
+
+resource "aws_lambda_function" "starter" {
+  filename         = data.archive_file.starter_lambda_zip.output_path
+  function_name    = "racingpost-starter"
+  role             = aws_iam_role.lambda.arn
+  handler          = "starter_lambda.lambda_handler"
+  runtime          = "python3.11"
+  source_code_hash = data.archive_file.starter_lambda_zip.output_base64sha256
+  timeout          = 30
+  memory_size      = 256
+
+  environment {
+    variables = {
+      ECS_CLUSTER_ARN         = aws_ecs_cluster.racingpost_scraper.arn
+      ECS_TASKDEF_PIPELINE_ARN = aws_ecs_task_definition.daily_pipeline.arn
+      ECS_SUBNETS             = join(",", aws_subnet.private[*].id)
+      ECS_SECURITY_GROUPS     = aws_security_group.ecs_tasks.id
+    }
+  }
+}
+
+# Grant Lambda permission to run ECS tasks
+data "aws_iam_policy_document" "starter_lambda_ecs" {
+  statement {
+    effect = "Allow"
+    actions = [
+      "ecs:RunTask"
+    ]
+    resources = [
+      aws_ecs_task_definition.daily_pipeline.arn
+    ]
+  }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "iam:PassRole"
+    ]
+    resources = [
+      aws_iam_role.ecs_task.arn
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "starter_lambda_ecs" {
+  name   = "racingpost-starter-ecs"
+  role   = aws_iam_role.lambda.id
+  policy = data.aws_iam_policy_document.starter_lambda_ecs.json
+}
+
+# Grant EventBridge Scheduler permission to invoke the starter Lambda
+resource "aws_lambda_permission" "scheduler" {
+  statement_id  = "AllowSchedulerInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.starter.function_name
+  principal     = "scheduler.amazonaws.com"
+}
+
+output "starter_lambda_arn" {
+  value = aws_lambda_function.starter.arn
+}
