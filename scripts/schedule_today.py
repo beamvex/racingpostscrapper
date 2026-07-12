@@ -232,37 +232,35 @@ def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: st
                 next_data = None
 
             if next_data:
-                # Walk the Next.js data for race entries with time + course + url
+                # Walk the Next.js data; URL-first: only collect when a specific race
+                # URL is found in the same dict object as the time, so they always match.
                 def walk(obj, depth=0):
                     if depth > 20:
                         return
                     if isinstance(obj, dict):
-                        course = (obj.get("courseName") or obj.get("course") or
-                                  obj.get("meetingName") or obj.get("meeting") or
-                                  obj.get("trackName") or obj.get("venue") or "").strip()
-                        time_str = (obj.get("raceTime") or obj.get("time") or
-                                    obj.get("offTime") or obj.get("startTime") or
-                                    obj.get("scheduledTime") or "").strip()
-                        url = (obj.get("url") or obj.get("racecardUrl") or
-                               obj.get("link") or "").strip()
-                        if course and time_str and _is_uk_or_ire_course(course):
-                            dt = _try_parse_time(time_str, date_yyyy_mm_dd)
-                            if dt:
-                                # Only include if we have a valid specific race URL
-                                # URL should be: /racecards/<course_no>/<course_slug>/<date>/<race_id>
-                                valid_url = None
-                                if url and "/racecards/" in url:
-                                    url_full = url if url.startswith("http") else f"https://www.racingpost.com{url}"
-                                    parts = url_full.rstrip("/").split("/")
-                                    # Structure: https://www.racingpost.com/racecards/<no>/<slug>/<date>/<id>
-                                    # That's 8 parts when split, racecards at index 3
-                                    if len(parts) >= 8 and parts[3] == "racecards":
-                                        valid_url = url_full
-                                if valid_url:
-                                    key = valid_url  # deduplicate by URL, not time
-                                    if key not in seen:
-                                        seen.add(key)
-                                        out.append((dt, valid_url))
+                        # Check for a valid specific race URL in this dict first
+                        raw_url = (obj.get("url") or obj.get("racecardUrl") or
+                                   obj.get("link") or "").strip()
+                        valid_url = None
+                        if raw_url and "/racecards/" in raw_url:
+                            url_full = raw_url if raw_url.startswith("http") else f"https://www.racingpost.com{raw_url}"
+                            parts = url_full.rstrip("/").split("/")
+                            # Must be: https://www.racingpost.com/racecards/<no>/<slug>/<date>/<id>
+                            # = 8 parts, racecards at index 3
+                            if len(parts) == 8 and parts[3] == "racecards":
+                                valid_url = url_full
+
+                        if valid_url:
+                            # Now get the time from the SAME dict — guarantees they match
+                            time_str = (obj.get("raceTime") or obj.get("offTime") or
+                                        obj.get("startTime") or obj.get("scheduledTime") or
+                                        obj.get("time") or "").strip()
+                            if time_str and valid_url not in seen:
+                                dt = _try_parse_time(time_str, date_yyyy_mm_dd)
+                                if dt:
+                                    seen.add(valid_url)
+                                    out.append((dt, valid_url))
+
                         for v in obj.values():
                             walk(v, depth + 1)
                     elif isinstance(obj, list):
