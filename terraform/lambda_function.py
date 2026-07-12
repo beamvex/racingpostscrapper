@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 s3 = boto3.client('s3')
 
 DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
-RUN_TS_RE = re.compile(r'racecard-probabilities-\d{4}-\d{2}-\d{2}-(\d{4,6})\.parquet$')
+RUN_TS_RE = re.compile(r'racecard-probabilities-\d{4}-\d{2}-\d{2}-(\d+)\.parquet$')
 
 
 def _parse_date(date_str: str) -> tuple[str, str, str, str] | None:
@@ -44,11 +44,7 @@ def _list_runs_for_date(bucket: str, y: str, m: str, d: str, date_str: str) -> l
             if not key.endswith('.parquet'):
                 continue
             m_ts = RUN_TS_RE.search(key)
-            if m_ts:
-                raw = m_ts.group(1)
-                ts = raw if len(raw) == 6 else raw + '00'  # normalise HHMM -> HHMM00
-            else:
-                ts = '000000'
+            ts = m_ts.group(1) if m_ts else '000000'
             files.append({'key': key, 'date': date_str, 'ts': ts})
         files.sort(key=lambda x: x['ts'], reverse=True)
         return files
@@ -121,7 +117,8 @@ def _build_sidebar(all_runs: list[dict], current_key: str,
         out.append('<div class="list-group list-group-flush">')
         for run in by_date[ds]:
             ts = run['ts']
-            label = f"{ts[:2]}:{ts[2:4]}"
+            # ts is HHMMSS (full-day run) or a numeric race_id (per-race run)
+            label = f"{ts[:2]}:{ts[2:4]}" if len(ts) == 6 and ts.isdigit() and int(ts[:2]) < 24 else ts
             active = ' active' if run['key'] == current_key else ''
             out.append(f'<a href="{_esc(_run_url(run))}" '
                        f'class="list-group-item list-group-item-action py-1 small{active}">'

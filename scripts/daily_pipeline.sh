@@ -150,8 +150,9 @@ fi
 # STEP 6: Parse racecard HTML into runners parquet
 # ============================================================
 HTML_DIR="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-racecards-html"
-if [ -n "${RACE_TIME:-}" ]; then
-  RUNNERS_OUT="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-${RACE_TIME}-runners.parquet"
+if [ -n "${RACE_URL:-}" ]; then
+  RACE_ID="${RACE_URL##*/}"
+  RUNNERS_OUT="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-${RACE_ID}-runners.parquet"
 else
   RUNNERS_OUT="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-runners.parquet"
 fi
@@ -185,8 +186,9 @@ fi
 # STEP 9: Compute probabilities and write parquet report
 # ============================================================
 RUN_TS=$(TZ="Europe/London" date +%H%M%S)
-if [ -n "${RACE_TIME:-}" ]; then
-  PROBABILITIES_PARQUET="${OUT_DIR}/racecard-probabilities-${RESULTS_DATE_USED}-${RACE_TIME}.parquet"
+if [ -n "${RACE_URL:-}" ]; then
+  RACE_ID="${RACE_URL##*/}"
+  PROBABILITIES_PARQUET="${OUT_DIR}/racecard-probabilities-${RESULTS_DATE_USED}-${RACE_ID}.parquet"
 else
   PROBABILITIES_PARQUET="${OUT_DIR}/racecard-probabilities-${RESULTS_DATE_USED}-${RUN_TS}.parquet"
 fi
