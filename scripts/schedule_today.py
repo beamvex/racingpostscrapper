@@ -247,9 +247,13 @@ def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: st
                                 key = dt.isoformat()
                                 if key not in seen:
                                     seen.add(key)
-                                    # Only include if we have a valid racecard URL
+                                    # Only include if we have a valid specific race URL
+                                    # URL should be: /racecards/<course_no>/<course_slug>/<date>/<race_id>
                                     if url and "/racecards/" in url:
-                                        out.append((dt, url))
+                                        parts = url.rstrip("/").split("/")
+                                        # Check if URL has the racecard detail structure (5 parts after domain)
+                                        if len(parts) >= 5 and parts[-5] == "racecards":
+                                            out.append((dt, url))
                         for v in obj.values():
                             walk(v, depth + 1)
                     elif isinstance(obj, list):
