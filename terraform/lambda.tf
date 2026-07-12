@@ -180,8 +180,14 @@ data "aws_iam_policy_document" "starter_lambda_ecs" {
       "iam:PassRole"
     ]
     resources = [
-      aws_iam_role.ecs_task.arn
+      aws_iam_role.ecs_task.arn,
+      aws_iam_role.ecs_task_execution.arn
     ]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["ecs-tasks.amazonaws.com"]
+    }
   }
 }
 
