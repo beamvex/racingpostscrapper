@@ -148,9 +148,16 @@ def _put_target(
         },
     }
 
+    target = {
+        "Id": target_id,
+        "Arn": cluster_arn,
+        "RoleArn": role_arn,
+        "EcsParameters": ecs_params,
+    }
+
     # Add environment override for race URL if provided
     if race_url:
-        ecs_params["Overrides"] = {
+        target["Overrides"] = {
             "ContainerOverrides": [
                 {
                     "Name": "daily-pipeline",
@@ -163,13 +170,6 @@ def _put_target(
                 }
             ]
         }
-
-    target = {
-        "Id": target_id,
-        "Arn": cluster_arn,
-        "RoleArn": role_arn,
-        "EcsParameters": ecs_params,
-    }
 
     _run(
         [
