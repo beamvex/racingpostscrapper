@@ -143,9 +143,9 @@ resource "aws_lambda_function" "starter" {
 
   environment {
     variables = {
-      ECS_CLUSTER_ARN          = aws_ecs_cluster.racingpost_scraper.arn
+      ECS_CLUSTER_ARN          = aws_ecs_cluster.main.arn
       ECS_TASKDEF_PIPELINE_ARN = aws_ecs_task_definition.daily_pipeline.arn
-      ECS_SUBNETS              = join(",", aws_subnet.private[*].id)
+      ECS_SUBNETS              = join(",", [aws_subnet.public_a.id, aws_subnet.public_b.id])
       ECS_SECURITY_GROUPS      = aws_security_group.ecs_tasks.id
     }
   }
