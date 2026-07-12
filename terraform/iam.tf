@@ -95,6 +95,19 @@ data "aws_iam_policy_document" "ecs_task_events" {
 
     resources = ["*"]
   }
+
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "scheduler:CreateSchedule",
+      "scheduler:DeleteSchedule",
+      "scheduler:GetSchedule",
+      "scheduler:ListSchedules"
+    ]
+
+    resources = ["*"]
+  }
 }
 
 resource "aws_iam_role_policy" "ecs_task_events" {
