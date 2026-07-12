@@ -247,10 +247,9 @@ def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: st
                                 key = dt.isoformat()
                                 if key not in seen:
                                     seen.add(key)
-                                    # If no URL in JSON, construct from course and date
-                                    if not url:
-                                        url = f"https://www.racingpost.com/racecards/{course}/{date_yyyy_mm_dd}"
-                                    out.append((dt, url))
+                                    # Only include if we have a valid racecard URL
+                                    if url and "/racecards/" in url:
+                                        out.append((dt, url))
                         for v in obj.values():
                             walk(v, depth + 1)
                     elif isinstance(obj, list):

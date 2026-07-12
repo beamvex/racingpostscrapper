@@ -44,11 +44,16 @@ async fn main() -> anyhow::Result<()> {
         let cards_dir = format!("{out_base_dir}racingpost-racecards-{results_date}-racecards-html");
         std::fs::create_dir_all(&cards_dir).with_context(|| format!("create {cards_dir}"))?;
 
-        let info = parse_racecard_detail_url(&url).unwrap_or_else(|| RacecardInfo {
-            course_no: "unknown".to_string(),
-            course_slug: "unknown".to_string(),
-            race_date: results_date.clone(),
-            race_id: "specific".to_string(),
+        let info = parse_racecard_detail_url(&url).unwrap_or_else(|| {
+            // Fallback: extract course_slug from URL if possible
+            let parts: Vec<&str> = url.split('/').collect();
+            let course_slug = parts.iter().rev().nth(2).unwrap_or(&"unknown").to_string();
+            RacecardInfo {
+                course_no: "1".to_string(),
+                course_slug,
+                race_date: results_date.clone(),
+                race_id: "1".to_string(),
+            }
         });
 
         let filename = format!(
