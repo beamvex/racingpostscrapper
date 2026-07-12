@@ -1,0 +1,22 @@
+graph TB
+    subgraph "S3 Bucket"
+        A[raw/]
+        B[processed/]
+        C[racecards/]
+        D[probabilities/]
+        
+        A --> A1[YYYY/MM/DD/]
+        B --> B1[YYYY/MM/DD/]
+        C --> C1[YYYY/MM/DD/]
+        D --> D1[YYYY/MM/DD/]
+        
+        A1 --> A2[HTML files]
+        B1 --> B2[Parquet files]
+        C1 --> C2[Runners Parquet]
+        D1 --> D3[Probabilities Parquet]
+    end
+    
+    style A fill:#fbf,stroke:#333,stroke-width:2px
+    style B fill:#bfb,stroke:#333,stroke-width:2px
+    style C fill:#bbf,stroke:#333,stroke-width:2px
+    style D fill:#fbb,stroke:#333,stroke-width:2px

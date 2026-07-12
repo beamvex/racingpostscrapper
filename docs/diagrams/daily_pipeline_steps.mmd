@@ -1,0 +1,27 @@
+graph TB
+    subgraph "VPC (10.0.0.0/16)"
+        subgraph "Public Subnets"
+            A[Public Subnet A<br/>10.0.1.0/24]
+            B[Public Subnet B<br/>10.0.2.0/24]
+        end
+        
+        subgraph "Private Subnets"
+            C[Private Subnet A<br/>10.0.3.0/24]
+            D[Private Subnet B<br/>10.0.4.0/24]
+        end
+        
+        E[Internet Gateway]
+        F[NAT Gateway]
+        G[Route Tables]
+    end
+    
+    A --> E
+    C --> F
+    F --> E
+    G --> A
+    G --> B
+    G --> C
+    G --> D
+    
+    style E fill:#f66,stroke:#333,stroke-width:2px
+    style F fill:#66f,stroke:#333,stroke-width:2px

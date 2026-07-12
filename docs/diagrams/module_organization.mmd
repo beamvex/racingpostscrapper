@@ -1,0 +1,13 @@
+flowchart TD
+    A[Rust Base Image] --> B[Install Dependencies]
+    B --> C[Install AWS CLI]
+    C --> D[Install Terraform]
+    D --> E[Copy Cargo Files]
+    E --> F[Build helloworld]
+    F --> G[Copy Source]
+    G --> H[Build All Binaries]
+    H --> I[Copy Scripts]
+    I --> J[Set Permissions]
+    J --> K[Configure Entry Point]
+    
+    style H fill:#f96,stroke:#333,stroke-width:2px

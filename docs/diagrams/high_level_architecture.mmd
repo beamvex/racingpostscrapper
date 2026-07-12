@@ -1,0 +1,39 @@
+graph TB
+    subgraph "Data Collection"
+        A[EventBridge Scheduler] --> B[ECS Task: Daily Pipeline]
+        B --> C[Results Scraper]
+        B --> D[Racecard Scraper]
+    end
+    
+    subgraph "Data Storage"
+        E[S3: Raw Data]
+        F[S3: Processed Data]
+        G[S3: Probabilities]
+    end
+    
+    subgraph "Data Processing"
+        H[Glue Crawler]
+        I[Glue Tables]
+        J[Rust: Probability Computation]
+    end
+    
+    subgraph "Data Presentation"
+        K[API Gateway]
+        L[Lambda: HTML Renderer]
+        M[Users]
+    end
+    
+    C --> E
+    D --> E
+    E --> H
+    H --> I
+    I --> F
+    F --> J
+    J --> G
+    G --> L
+    K --> L
+    L --> M
+    
+    style A fill:#f9f,stroke:#333,stroke-width:2px
+    style B fill:#bbf,stroke:#333,stroke-width:2px
+    style L fill:#bfb,stroke:#333,stroke-width:2px

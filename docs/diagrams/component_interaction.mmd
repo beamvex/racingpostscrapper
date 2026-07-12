@@ -1,0 +1,27 @@
+sequenceDiagram
+    participant EB as EventBridge
+    participant ECS as ECS Task
+    participant RS as Results Scraper
+    participant RCS as Racecard Scraper
+    participant S3 as S3 Bucket
+    participant Glue as Glue Crawler
+    participant Prob as Probability Engine
+    participant Lambda as Lambda Function
+    participant API as API Gateway
+    participant User as User
+    
+    EB->>ECS: Trigger pipeline (10 min before race)
+    ECS->>RS: Scrape results
+    RS->>S3: Upload raw HTML
+    ECS->>RCS: Scrape racecards
+    RCS->>S3: Upload racecard HTML
+    S3->>Glue: Notify new data
+    Glue->>S3: Crawl and catalog
+    ECS->>Prob: Compute probabilities
+    Prob->>S3: Read historical data
+    Prob->>S3: Write probabilities
+    User->>API: Request report
+    API->>Lambda: Proxy request
+    Lambda->>S3: Read probabilities
+    Lambda->>API: Return HTML
+    API->>User: Display report

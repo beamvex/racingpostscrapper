@@ -1,0 +1,24 @@
+graph TB
+    subgraph "ECS Cluster"
+        subgraph "Task Definitions"
+            A[Daily Pipeline]
+            B[Racecard Scraper]
+            C[Scheduler]
+            D[Backfiller]
+            E[Processor]
+        end
+        
+        subgraph "Tasks"
+            F[Running Task 1]
+            G[Running Task 2]
+            H[Running Task 3]
+        end
+    end
+    
+    A --> F
+    B --> G
+    C --> H
+    
+    style A fill:#bbf,stroke:#333,stroke-width:2px
+    style B fill:#bbf,stroke:#333,stroke-width:2px
+    style C fill:#bbf,stroke:#333,stroke-width:2px

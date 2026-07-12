@@ -1,0 +1,28 @@
+flowchart TD
+    A[Pipeline Start] --> B{Browser Setup}
+    B -->|Success| C[Results Scraping]
+    B -->|Failure| Z[Error Exit]
+    
+    C --> D{Results Success?}
+    D -->|Yes| E[Upload to S3]
+    D -->|No| F[Log Error]
+    
+    E --> G[Trigger Glue]
+    G --> H[Restart Browser]
+    H --> I[Racecard Scraping]
+    
+    I --> J{Racecard Success?}
+    J -->|Yes| K[Parse HTML]
+    J -->|No| Z
+    
+    K --> L[Upload Runners]
+    L --> M[Download History]
+    M --> N[Compute Probabilities]
+    N --> O[Upload Probabilities]
+    O --> P[Cleanup]
+    P --> Q[Success Exit]
+    
+    F --> H
+    
+    style Z fill:#f66,stroke:#333,stroke-width:2px
+    style Q fill:#6f6,stroke:#333,stroke-width:2px

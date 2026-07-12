@@ -1,0 +1,32 @@
+graph TB
+    subgraph "app/src"
+        A[bin/] --> A1[backtest.rs]
+        A --> A2[racecards_time_order_scraper.rs]
+        A --> A3[racecard_html_dir_parser.rs]
+        A --> A4[today_first_race_table.rs]
+        A --> A5[full_result_*.rs]
+        
+        B[scrape/] --> B1[browser.rs]
+        B --> B2[time_order.rs]
+        B --> B3[full_results.rs]
+        B --> B4[urls.rs]
+        
+        C[utils/] --> C1[date.rs]
+        C --> C2[html_text.rs]
+        C --> C3[text.rs]
+        
+        D[full_result_parse/] --> D1[parse.rs]
+        D --> D2[json.rs]
+        D --> D3[tsv.rs]
+        
+        E[racingpost/] --> E1[extract.rs]
+        E --> E2[filter.rs]
+        
+        F[parser_run/] --> F1[fetch.rs]
+        F --> F2[output.rs]
+        F --> F3[run.rs]
+    end
+    
+    style A fill:#bbf,stroke:#333,stroke-width:2px
+    style B fill:#bbf,stroke:#333,stroke-width:2px
+    style C fill:#bbf,stroke:#333,stroke-width:2px

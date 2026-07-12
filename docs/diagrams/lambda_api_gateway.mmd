@@ -1,0 +1,11 @@
+flowchart TD
+    A[Fetch Time-Order HTML] --> B[Extract Race Times]
+    B --> C[Parse Times as London]
+    C --> D[Convert to UTC]
+    D --> E[Generate Cron Expressions]
+    E --> F[Create Pre-Race Rules]
+    F --> G[Create Post-Race Rule]
+    G --> H[Cleanup Old Rules]
+    
+    style B fill:#f96,stroke:#333,stroke-width:2px
+    style E fill:#96f,stroke:#333,stroke-width:2px

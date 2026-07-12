@@ -1,0 +1,18 @@
+flowchart TD
+    A[Start Daily Pipeline] --> B[Setup Browser]
+    B --> C[Scrape Results]
+    C --> D[Upload to S3]
+    D --> E[Trigger Glue Processing]
+    E --> F[Restart Browser]
+    F --> G[Scrape Racecards]
+    G --> H[Parse Racecard HTML]
+    H --> I[Upload Runners to S3]
+    I --> J[Download History]
+    J --> K[Compute Probabilities]
+    K --> L[Upload Probabilities]
+    L --> M[Cleanup]
+    M --> N[End]
+    
+    style C fill:#f96,stroke:#333,stroke-width:2px
+    style G fill:#f96,stroke:#333,stroke-width:2px
+    style K fill:#9f6,stroke:#333,stroke-width:2px

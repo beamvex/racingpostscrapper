@@ -1,0 +1,10 @@
+graph LR
+    A[User Browser] --> B[API Gateway]
+    B --> C[Lambda Function]
+    C --> D[S3 Bucket]
+    D --> C
+    C --> B
+    B --> A
+    
+    style C fill:#bfb,stroke:#333,stroke-width:2px
+    style D fill:#fbf,stroke:#333,stroke-width:2px

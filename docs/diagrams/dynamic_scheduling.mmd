@@ -1,0 +1,18 @@
+flowchart TD
+    A[API Gateway Request] --> B[Path Parameter Parsing]
+    B --> C{Date Valid?}
+    C -->|No| D[400 Error]
+    C -->|Yes| E[List S3 Runs]
+    E --> F[Select Run]
+    F --> G[Fetch Parquet]
+    G --> H{File Exists?}
+    H -->|No| I[404 Error]
+    H -->|Yes| J[Read with PyArrow]
+    J --> K[Build HTML]
+    K --> L[Render Sidebar]
+    L --> M[Sort by Edge]
+    M --> N[Return Response]
+    
+    style D fill:#f66,stroke:#333,stroke-width:2px
+    style I fill:#f66,stroke:#333,stroke-width:2px
+    style N fill:#6f6,stroke:#333,stroke-width:2px
