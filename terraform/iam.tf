@@ -181,6 +181,21 @@ data "aws_iam_policy_document" "ecs_task_ecs" {
       values   = ["events.amazonaws.com"]
     }
   }
+
+  statement {
+    effect = "Allow"
+    actions = [
+      "iam:PassRole"
+    ]
+    resources = [
+      aws_iam_role.lambda.arn
+    ]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["scheduler.amazonaws.com"]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "ecs_task_ecs" {
