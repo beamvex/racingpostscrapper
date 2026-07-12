@@ -29,10 +29,6 @@ def _parse_iso8601(s: str) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-def _cron_expr(dt: datetime) -> str:
-    dt = dt.astimezone(timezone.utc)
-    return f"cron({dt.minute} {dt.hour} {dt.day} {dt.month} ? {dt.year})"
-
 
 def _run(cmd: list[str]) -> None:
     subprocess.run(cmd, check=True)
@@ -44,17 +40,17 @@ def _run_quiet(cmd: list[str]) -> bool:
     return result.returncode == 0
 
 
-def _rule_exists(name: str) -> bool:
+def _schedule_exists(name: str) -> bool:
     region = os.environ.get("AWS_REGION", "eu-west-2")
     return _run_quiet(
-        ["aws", "events", "describe-rule", "--name", name, "--region", region]
+        ["aws", "scheduler", "get-schedule", "--name", name, "--region", region]
     )
 
 
-def _list_rule_names(prefix: str) -> list[str]:
+def _list_schedule_names(prefix: str) -> list[str]:
     region = os.environ.get("AWS_REGION", "eu-west-2")
     result = subprocess.run(
-        ["aws", "events", "list-rules", "--name-prefix", prefix, "--region", region, "--output", "json"],
+        ["aws", "scheduler", "list-schedules", "--name-prefix", prefix, "--region", region, "--output", "json"],
         capture_output=True,
         text=True,
     )
@@ -64,60 +60,37 @@ def _list_rule_names(prefix: str) -> list[str]:
         data = json.loads(result.stdout)
     except json.JSONDecodeError:
         return []
-    return [r["Name"] for r in data.get("Rules", [])]
+    return [s["Name"] for s in data.get("Schedules", [])]
 
 
-def _delete_rule(name: str) -> None:
+def _delete_schedule(name: str) -> None:
     region = os.environ.get("AWS_REGION", "eu-west-2")
-    # Remove targets first
     _run_quiet(
-        ["aws", "events", "remove-targets", "--rule", name, "--ids", "ecs-run-task", "--region", region]
-    )
-    _run_quiet(
-        ["aws", "events", "delete-rule", "--name", name, "--region", region]
+        ["aws", "scheduler", "delete-schedule", "--name", name, "--region", region]
     )
 
 
-def _cleanup_old_rules(prefix: str, today_str: str) -> int:
-    """Delete rules with the given prefix whose names contain a date before today_str.
-    Returns the number of rules deleted."""
-    names = _list_rule_names(prefix)
+def _cleanup_old_schedules(prefix: str, today_str: str) -> int:
+    """Delete schedules with the given prefix whose names contain a date before today_str.
+    Returns the number of schedules deleted."""
+    names = _list_schedule_names(prefix)
     deleted = 0
     for name in names:
         # Extract date part: rps-pipeline-pre-YYYYMMDD-HHMM or rps-pipeline-post-YYYYMMDD-HHMM
         # After prefix, skip "pre-" or "post-" (4 chars), then 8-char date
         rest = name[len(prefix):]  # e.g. "pre-20260706-1315" or "post-20260706-1315"
         if len(rest) >= 13:  # pre-/post- (4) + YYYYMMDD (8) + at least "-"
-            rule_date = rest[4:12]  # skip "pre-" or "post-"
-            if rule_date < today_str:
-                print(f"  deleting old rule: {name}")
-                _delete_rule(name)
+            schedule_date = rest[4:12]  # skip "pre-" or "post-"
+            if schedule_date < today_str:
+                print(f"  deleting old schedule: {name}")
+                _delete_schedule(name)
                 deleted += 1
     return deleted
 
 
-def _put_rule(name: str, schedule_expression: str) -> None:
-    region = os.environ.get("AWS_REGION", "eu-west-2")
-    _run(
-        [
-            "aws",
-            "events",
-            "put-rule",
-            "--name",
-            name,
-            "--schedule-expression",
-            schedule_expression,
-            "--state",
-            "ENABLED",
-            "--region",
-            region,
-        ]
-    )
-
-
-def _put_target(
-    rule_name: str,
-    target_id: str,
+def _create_schedule(
+    name: str,
+    dt: datetime,
     cluster_arn: str,
     role_arn: str,
     task_def_arn: str,
@@ -135,8 +108,9 @@ def _put_target(
     if not sgs:
         raise RuntimeError("no security groups configured")
 
-    ecs_params = {
+    ecs_params: dict = {
         "TaskDefinitionArn": task_def_arn,
+        "TaskCount": 1,
         "LaunchType": "FARGATE",
         "PlatformVersion": "LATEST",
         "NetworkConfiguration": {
@@ -148,40 +122,37 @@ def _put_target(
         },
     }
 
-    # Add environment override for race URL if provided
     if race_url:
         ecs_params["TaskOverride"] = {
             "ContainerOverrides": [
                 {
                     "Name": "daily-pipeline",
                     "Environment": [
-                        {
-                            "Name": "RACE_URL",
-                            "Value": race_url
-                        }
-                    ]
+                        {"Name": "RACE_URL", "Value": race_url}
+                    ],
                 }
             ]
         }
 
-    target = {
-        "Id": target_id,
+    target = json.dumps({
         "Arn": cluster_arn,
         "RoleArn": role_arn,
         "EcsParameters": ecs_params,
-    }
+    })
+
+    # EventBridge Scheduler uses at(yyyy-mm-ddThh:mm:ss) for one-time schedules (UTC)
+    at_expr = dt.astimezone(timezone.utc).strftime("at(%Y-%m-%dT%H:%M:%S)")
 
     _run(
         [
-            "aws",
-            "events",
-            "put-targets",
-            "--rule",
-            rule_name,
-            "--targets",
-            json.dumps([target]),
-            "--region",
-            region,
+            "aws", "scheduler", "create-schedule",
+            "--name", name,
+            "--schedule-expression", at_expr,
+            "--schedule-expression-timezone", "UTC",
+            "--flexible-time-window", json.dumps({"Mode": "OFF"}),
+            "--target", target,
+            "--action-after-completion", "DELETE",
+            "--region", region,
         ]
     )
 
@@ -379,11 +350,11 @@ def main() -> None:
 
     print(f"found {len(times)} unique UK/IRE race times")
 
-    # Clean up old rules from before today
+    # Clean up old schedules from before today
     today_stamp = date_yyyy_mm_dd.replace("-", "")
-    deleted = _cleanup_old_rules("rps-pipeline-", today_stamp)
+    deleted = _cleanup_old_schedules("rps-pipeline-", today_stamp)
     if deleted:
-        print(f"cleaned up {deleted} old rule(s)")
+        print(f"cleaned up {deleted} old schedule(s)")
 
     def _lon(dt: datetime) -> datetime:
         return dt.astimezone(TZ_LONDON)
@@ -392,15 +363,14 @@ def main() -> None:
     for dt, url in times:
         dt_pre = dt - timedelta(minutes=10)
         stamp = _lon(dt).strftime("%Y%m%d-%H%M")
-        rule_name = f"rps-pipeline-pre-{stamp}"
+        schedule_name = f"rps-pipeline-pre-{stamp}"
 
-        if _rule_exists(rule_name):
-            print(f"  skip pre-race  {_lon(dt_pre).strftime('%H:%M')} London  (rule {rule_name} already exists)")
+        if _schedule_exists(schedule_name):
+            print(f"  skip pre-race  {_lon(dt_pre).strftime('%H:%M')} London  (schedule {schedule_name} already exists)")
             continue
-        _put_rule(rule_name, _cron_expr(dt_pre))
-        _put_target(
-            rule_name=rule_name,
-            target_id="ecs-run-task",
+        _create_schedule(
+            name=schedule_name,
+            dt=dt_pre,
             cluster_arn=cluster_arn,
             role_arn=role_arn,
             task_def_arn=taskdef_pipeline,
@@ -410,32 +380,30 @@ def main() -> None:
         )
         print(f"  scheduled pre-race  {_lon(dt_pre).strftime('%H:%M')} London"
               f"  (race at {_lon(dt).strftime('%H:%M')} London"
-              f" / cron UTC {_cron_expr(dt_pre)}"
+              f" / at UTC {dt_pre.astimezone(timezone.utc).strftime('%H:%M')}"
               f" / url {url})")
 
     # Schedule pipeline 30 mins after the last race
     last_dt, last_url = times[-1]
     dt_post = last_dt + timedelta(minutes=30)
     stamp = _lon(last_dt).strftime("%Y%m%d-%H%M")
-    rule_name = f"rps-pipeline-post-{stamp}"
+    schedule_name = f"rps-pipeline-post-{stamp}"
 
-    if _rule_exists(rule_name):
-        print(f"  skip post-race {_lon(dt_post).strftime('%H:%M')} London  (rule {rule_name} already exists)")
+    if _schedule_exists(schedule_name):
+        print(f"  skip post-race {_lon(dt_post).strftime('%H:%M')} London  (schedule {schedule_name} already exists)")
     else:
-        _put_rule(rule_name, _cron_expr(dt_post))
-        _put_target(
-            rule_name=rule_name,
-            target_id="ecs-run-task",
+        _create_schedule(
+            name=schedule_name,
+            dt=dt_post,
             cluster_arn=cluster_arn,
             role_arn=role_arn,
             task_def_arn=taskdef_pipeline,
             subnets_csv=subnets_csv,
             security_groups_csv=security_groups_csv,
-            # No race URL for post-race (no specific race)
         )
         print(f"  scheduled post-race {_lon(dt_post).strftime('%H:%M')} London"
               f"  (30 min after last race at {_lon(last_dt).strftime('%H:%M')} London"
-              f" / cron UTC {_cron_expr(dt_post)})")
+              f" / at UTC {dt_post.astimezone(timezone.utc).strftime('%H:%M')}")
 
     print("done")
 
