@@ -150,7 +150,11 @@ fi
 # STEP 6: Parse racecard HTML into runners parquet
 # ============================================================
 HTML_DIR="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-racecards-html"
-RUNNERS_OUT="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-runners.parquet"
+if [ -n "${RACE_TIME:-}" ]; then
+  RUNNERS_OUT="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-${RACE_TIME}-runners.parquet"
+else
+  RUNNERS_OUT="${OUT_DIR}/racingpost-racecards-${RESULTS_DATE_USED}-runners.parquet"
+fi
 
 echo "=== step 6: parsing racecard html ==="
 /app/target/release/racecard_html_dir_parser --html-dir "${HTML_DIR}" --out "${RUNNERS_OUT}"
@@ -181,7 +185,11 @@ fi
 # STEP 9: Compute probabilities and write parquet report
 # ============================================================
 RUN_TS=$(TZ="Europe/London" date +%H%M%S)
-PROBABILITIES_PARQUET="${OUT_DIR}/racecard-probabilities-${RESULTS_DATE_USED}-${RUN_TS}.parquet"
+if [ -n "${RACE_TIME:-}" ]; then
+  PROBABILITIES_PARQUET="${OUT_DIR}/racecard-probabilities-${RESULTS_DATE_USED}-${RACE_TIME}.parquet"
+else
+  PROBABILITIES_PARQUET="${OUT_DIR}/racecard-probabilities-${RESULTS_DATE_USED}-${RUN_TS}.parquet"
+fi
 echo "=== step 9: computing probabilities ==="
 /app/target/release/today_first_race_table \
   --in="${RUNNERS_OUT}" \

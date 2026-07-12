@@ -93,6 +93,7 @@ def _create_schedule(
     dt: datetime,
     lambda_arn: str,
     race_url: str | None = None,
+    race_time: str | None = None,
 ) -> None:
     region = os.environ.get("AWS_REGION", "eu-west-2")
 
@@ -102,12 +103,15 @@ def _create_schedule(
         "RoleArn": f"arn:aws:iam::{_account_id()}:role/racingpost-scraper-lambda",
     })
 
-    # Pass race URL in the Lambda input
+    # Pass race URL and race time in the Lambda input
     if race_url:
+        payload: dict = {"race_url": race_url}
+        if race_time:
+            payload["race_time"] = race_time
         target = json.dumps({
             "Arn": lambda_arn,
             "RoleArn": f"arn:aws:iam::{_account_id()}:role/racingpost-scraper-lambda",
-            "Input": json.dumps({"race_url": race_url}),
+            "Input": json.dumps(payload),
         })
 
     # EventBridge Scheduler uses at(yyyy-mm-ddThh:mm:ss) for one-time schedules (UTC)
@@ -359,11 +363,13 @@ def main() -> None:
         if _schedule_exists(schedule_name):
             print(f"  skip pre-race  {_lon(dt_pre).strftime('%H:%M')} London  (schedule {schedule_name} already exists)")
             continue
+        race_time_str = _lon(dt).strftime("%H%M")
         _create_schedule(
             name=schedule_name,
             dt=dt_pre,
             lambda_arn=lambda_arn,
             race_url=url,
+            race_time=race_time_str,
         )
         print(f"  scheduled pre-race  {_lon(dt_pre).strftime('%H:%M')} London"
               f"  (race at {_lon(dt).strftime('%H:%M')} London"

@@ -28,18 +28,17 @@ def lambda_handler(event, context):
         }
     }
     
-    # Add container override for race URL if provided
+    # Add container overrides for race URL and time if provided
+    race_time = event.get('race_time')
     if race_url:
+        env_overrides = [{'name': 'RACE_URL', 'value': race_url}]
+        if race_time:
+            env_overrides.append({'name': 'RACE_TIME', 'value': race_time})
         ecs_params['overrides'] = {
             'containerOverrides': [
                 {
                     'name': 'daily-pipeline',
-                    'environment': [
-                        {
-                            'name': 'RACE_URL',
-                            'value': race_url
-                        }
-                    ]
+                    'environment': env_overrides
                 }
             ]
         }
