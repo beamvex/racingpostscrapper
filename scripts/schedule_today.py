@@ -244,16 +244,21 @@ def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: st
                         if course and time_str and _is_uk_or_ire_course(course):
                             dt = _try_parse_time(time_str, date_yyyy_mm_dd)
                             if dt:
-                                key = dt.isoformat()
-                                if key not in seen:
-                                    seen.add(key)
-                                    # Only include if we have a valid specific race URL
-                                    # URL should be: /racecards/<course_no>/<course_slug>/<date>/<race_id>
-                                    if url and "/racecards/" in url:
-                                        parts = url.rstrip("/").split("/")
-                                        # Check if URL has the racecard detail structure (5 parts after domain)
-                                        if len(parts) >= 5 and parts[-5] == "racecards":
-                                            out.append((dt, url))
+                                # Only include if we have a valid specific race URL
+                                # URL should be: /racecards/<course_no>/<course_slug>/<date>/<race_id>
+                                valid_url = None
+                                if url and "/racecards/" in url:
+                                    url_full = url if url.startswith("http") else f"https://www.racingpost.com{url}"
+                                    parts = url_full.rstrip("/").split("/")
+                                    # Structure: https://www.racingpost.com/racecards/<no>/<slug>/<date>/<id>
+                                    # That's 8 parts when split, racecards at index 3
+                                    if len(parts) >= 8 and parts[3] == "racecards":
+                                        valid_url = url_full
+                                if valid_url:
+                                    key = valid_url  # deduplicate by URL, not time
+                                    if key not in seen:
+                                        seen.add(key)
+                                        out.append((dt, valid_url))
                         for v in obj.values():
                             walk(v, depth + 1)
                     elif isinstance(obj, list):
