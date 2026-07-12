@@ -3,7 +3,8 @@ FROM rust:trixie
 RUN apt-get update
 RUN apt-get install -y net-tools inetutils-tools inetutils-ping nano unzip gpg wget xvfb chromium
 RUN apt-get install -y curl
-RUN apt-get install -y python3
+RUN apt-get install -y python3 python3-pip
+RUN pip3 install --break-system-packages beautifulsoup4
 
 RUN mv /usr/bin/chromium /usr/bin/og-chromium \
     && ln -s /usr/bin/og-chromium /usr/bin/chromium
@@ -55,6 +56,9 @@ COPY ./scripts/scrape_racecard.sh /app/scrape_racecard.sh
 RUN chmod +x /app/scrape_racecard.sh
 
 COPY ./scripts/schedule_today.py /app/schedule_today.py
+COPY ./scripts/schedule_utils.py /app/schedule_utils.py
+COPY ./scripts/schedule_aws.py /app/schedule_aws.py
+COPY ./scripts/schedule_parser.py /app/schedule_parser.py
 RUN chmod +x /app/schedule_today.py
 
 COPY ./scripts/daily_pipeline.sh /app/daily_pipeline.sh

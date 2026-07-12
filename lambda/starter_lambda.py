@@ -7,6 +7,7 @@ ecs = boto3.client('ecs')
 def lambda_handler(event, context):
     # Extract race URL from the event payload
     race_url = event.get('race_url')
+    race_time = event.get('race_time')
     
     # Get configuration from environment variables
     cluster_arn = os.environ['ECS_CLUSTER_ARN']
@@ -28,13 +29,18 @@ def lambda_handler(event, context):
         }
     }
     
-    # Add container override for race URL if provided
+    # Add container overrides for race URL and time if provided
+    env_overrides = []
     if race_url:
+        env_overrides.append({'name': 'RACE_URL', 'value': race_url})
+    if race_time:
+        env_overrides.append({'name': 'RACE_TIME', 'value': race_time})
+    if env_overrides:
         ecs_params['overrides'] = {
             'containerOverrides': [
                 {
                     'name': 'daily-pipeline',
-                    'environment': [{'name': 'RACE_URL', 'value': race_url}]
+                    'environment': env_overrides,
                 }
             ]
         }

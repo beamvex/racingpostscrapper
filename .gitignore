@@ -1,3 +1,5 @@
 target
 .DS_Store
 data
+*.log
+__pycache__
