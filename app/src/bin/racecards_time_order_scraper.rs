@@ -11,9 +11,19 @@ async fn main() -> anyhow::Result<()> {
 
     let mut time_order_only = false;
     let mut results_date: Option<String> = None;
+    let mut specific_url: Option<String> = None;
+    let mut expect_url = false;
     for arg in std::env::args().skip(1) {
         if arg == "--time-order-only" {
             time_order_only = true;
+        } else if arg == "--url" {
+            expect_url = true;
+        } else if expect_url {
+            specific_url = Some(arg);
+            expect_url = false;
+        } else if arg.starts_with("--url=") {
+            // --url=value format
+            specific_url = Some(arg.strip_prefix("--url=").unwrap().to_string());
         } else {
             results_date = Some(arg);
         }
@@ -23,11 +33,49 @@ async fn main() -> anyhow::Result<()> {
         .or_else(|| std::env::var("RESULTS_DATE").ok())
         .unwrap_or_else(|| Utc::now().with_timezone(&London).format("%Y-%m-%d").to_string());
 
-    let target_url = "https://www.racingpost.com/racecards/time-order/";
-    eprintln!("racecards: target_url={target_url}");
-
     let out_base_dir = racingpost_scraper::scrape::out_base_dir_for_date(&results_date)?;
     eprintln!("racecards: out_base_dir={out_base_dir}");
+
+    // If a specific URL is provided, download only that racecard
+    if let Some(url) = specific_url {
+        eprintln!("racecards: scraping specific URL: {}", url);
+        let (mut browser, handler_task) = racingpost_scraper::scrape::connect_browser_and_spawn_handler().await?;
+
+        let cards_dir = format!("{out_base_dir}racingpost-racecards-{results_date}-racecards-html");
+        std::fs::create_dir_all(&cards_dir).with_context(|| format!("create {cards_dir}"))?;
+
+        let info = parse_racecard_detail_url(&url).unwrap_or_else(|| RacecardInfo {
+            course_no: "unknown".to_string(),
+            course_slug: "unknown".to_string(),
+            race_date: results_date.clone(),
+            race_id: "specific".to_string(),
+        });
+
+        let filename = format!(
+            "{}-{}-{}-{}.html",
+            info.race_date, info.course_no, info.course_slug, info.race_id
+        );
+        let path = format!("{}/{}", cards_dir.trim_end_matches('/'), filename);
+
+        eprintln!("racecards: downloading specific racecard to {}", path);
+        let ok = download_single_racecard(&mut browser, &url, &path).await?;
+
+        eprintln!("racecards: closing browser");
+        browser.close().await.ok();
+        handler_task.abort();
+
+        if ok {
+            eprintln!("racecards: done (specific racecard downloaded)");
+        } else {
+            eprintln!("racecards: failed to download specific racecard");
+            return Err(anyhow::anyhow!("failed to download specific racecard"));
+        }
+        return Ok(());
+    }
+
+    // Normal time-order scraping
+    let target_url = "https://www.racingpost.com/racecards/time-order/";
+    eprintln!("racecards: target_url={target_url}");
 
     let (mut browser, handler_task) = racingpost_scraper::scrape::connect_browser_and_spawn_handler().await?;
 
@@ -114,6 +162,60 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn download_single_racecard(
+    browser: &mut chromiumoxide::browser::Browser,
+    url: &str,
+    path: &str,
+) -> anyhow::Result<bool> {
+    let mut ok = false;
+    for attempt in 1..=3 {
+        eprintln!(
+            "racecards: fetching single racecard (attempt {}/3) {}",
+            attempt, url
+        );
+        let page = match timeout(Duration::from_secs(30), browser.new_page(url)).await {
+            Ok(Ok(p)) => p,
+            Ok(Err(e)) => {
+                eprintln!("racecards: open page failed err={}", e);
+                continue;
+            }
+            Err(_) => {
+                eprintln!("racecards: open page timeout");
+                continue;
+            }
+        };
+
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        let html = match timeout(Duration::from_secs(30), page.content()).await {
+            Ok(Ok(h)) => h,
+            Ok(Err(e)) => {
+                eprintln!("racecards: fetch html failed err={}", e);
+                page.close().await.ok();
+                continue;
+            }
+            Err(_) => {
+                eprintln!("racecards: fetch html timeout");
+                page.close().await.ok();
+                continue;
+            }
+        };
+
+        if let Err(e) = std::fs::write(&path, &html).with_context(|| format!("write {path}"))
+        {
+            eprintln!("racecards: write failed err={}", e);
+            page.close().await.ok();
+            continue;
+        }
+
+        page.close().await.ok();
+
+        ok = true;
+        break;
+    }
+
+    Ok(ok)
+}
+
 async fn download_racecards_html(
     browser: &mut chromiumoxide::browser::Browser,
     urls: &[String],
@@ -137,52 +239,7 @@ async fn download_racecards_html(
         );
         let path = format!("{}/{}", out_dir.trim_end_matches('/'), filename);
 
-        let mut ok = false;
-        for attempt in 1..=3 {
-            eprintln!(
-                "racecards: seq={} fetching racecard (attempt {}/3) {}",
-                seq, attempt, url
-            );
-            let page = match timeout(Duration::from_secs(30), browser.new_page(url)).await {
-                Ok(Ok(p)) => p,
-                Ok(Err(e)) => {
-                    eprintln!("racecards: seq={} open page failed err={}", seq, e);
-                    continue;
-                }
-                Err(_) => {
-                    eprintln!("racecards: seq={} open page timeout", seq);
-                    continue;
-                }
-            };
-
-            tokio::time::sleep(Duration::from_secs(3)).await;
-            let html = match timeout(Duration::from_secs(30), page.content()).await {
-                Ok(Ok(h)) => h,
-                Ok(Err(e)) => {
-                    eprintln!("racecards: seq={} fetch html failed err={}", seq, e);
-                    page.close().await.ok();
-                    continue;
-                }
-                Err(_) => {
-                    eprintln!("racecards: seq={} fetch html timeout", seq);
-                    page.close().await.ok();
-                    continue;
-                }
-            };
-
-            if let Err(e) = std::fs::write(&path, &html).with_context(|| format!("write {path}"))
-            {
-                eprintln!("racecards: seq={} write failed err={}", seq, e);
-                page.close().await.ok();
-                continue;
-            }
-
-            page.close().await.ok();
-
-            ok = true;
-            break;
-        }
-
+        let ok = download_single_racecard(browser, url, &path).await?;
         if ok {
             downloaded += 1;
         } else {

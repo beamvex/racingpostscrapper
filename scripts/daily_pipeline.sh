@@ -131,7 +131,12 @@ done
 # STEP 5: Scrape today's racecard
 # ============================================================
 echo "=== step 5: scraping racecard ==="
-/app/target/release/racecards_time_order_scraper "${RESULTS_DATE_USED}"
+if [ -n "${RACE_URL:-}" ]; then
+  echo "scraping specific race URL: ${RACE_URL}"
+  /app/target/release/racecards_time_order_scraper "${RESULTS_DATE_USED}" --url "${RACE_URL}"
+else
+  /app/target/release/racecards_time_order_scraper "${RESULTS_DATE_USED}"
+fi
 RACECARD_EXIT=$?
 
 if [ "${RACECARD_EXIT}" -ne 0 ]; then

@@ -123,6 +123,7 @@ def _put_target(
     task_def_arn: str,
     subnets_csv: str,
     security_groups_csv: str,
+    race_url: str | None = None,
 ) -> None:
     region = os.environ.get("AWS_REGION", "eu-west-2")
 
@@ -146,6 +147,22 @@ def _put_target(
             }
         },
     }
+
+    # Add environment override for race URL if provided
+    if race_url:
+        ecs_params["Overrides"] = {
+            "ContainerOverrides": [
+                {
+                    "Name": "daily-pipeline",
+                    "Environment": [
+                        {
+                            "Name": "RACE_URL",
+                            "Value": race_url
+                        }
+                    ]
+                }
+            ]
+        }
 
     target = {
         "Id": target_id,
@@ -230,13 +247,14 @@ def _course_from_url(url: str) -> str:
         return ""
 
 
-def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: str) -> list[datetime]:
-    """Parse the time-order page HTML to extract race times for UK/IRE courses."""
+def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: str) -> list[tuple[datetime, str]]:
+    """Parse the time-order page HTML to extract race times and URLs for UK/IRE courses.
+    Returns list of (datetime, url) tuples."""
     with open(html_path, "r", encoding="utf-8") as f:
         html = f.read()
 
     seen = set()
-    out: list[datetime] = []
+    out: list[tuple[datetime, str]] = []
 
     # Try Next.js data first
     marker = '<script id="__NEXT_DATA__" type="application/json">'
@@ -251,7 +269,7 @@ def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: st
                 next_data = None
 
             if next_data:
-                # Walk the Next.js data for race entries with time + course
+                # Walk the Next.js data for race entries with time + course + url
                 def walk(obj, depth=0):
                     if depth > 20:
                         return
@@ -262,13 +280,18 @@ def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: st
                         time_str = (obj.get("raceTime") or obj.get("time") or
                                     obj.get("offTime") or obj.get("startTime") or
                                     obj.get("scheduledTime") or "").strip()
+                        url = (obj.get("url") or obj.get("racecardUrl") or
+                               obj.get("link") or "").strip()
                         if course and time_str and _is_uk_or_ire_course(course):
                             dt = _try_parse_time(time_str, date_yyyy_mm_dd)
                             if dt:
                                 key = dt.isoformat()
                                 if key not in seen:
                                     seen.add(key)
-                                    out.append(dt)
+                                    # If no URL in JSON, construct from course and date
+                                    if not url:
+                                        url = f"https://www.racingpost.com/racecards/{course}/{date_yyyy_mm_dd}"
+                                    out.append((dt, url))
                         for v in obj.values():
                             walk(v, depth + 1)
                     elif isinstance(obj, list):
@@ -322,9 +345,12 @@ def _extract_race_times_from_time_order_html(html_path: str, date_yyyy_mm_dd: st
             key = dt.isoformat()
             if key not in seen:
                 seen.add(key)
-                out.append(dt)
+                # Convert relative URL to absolute if needed
+                if url.startswith("/"):
+                    url = f"https://www.racingpost.com{url}"
+                out.append((dt, url))
 
-    out.sort()
+    out.sort(key=lambda x: x[0])
     return out
 
 
@@ -363,7 +389,7 @@ def main() -> None:
         return dt.astimezone(TZ_LONDON)
 
     # Schedule pipeline 10 mins before each race
-    for dt in times:
+    for dt, url in times:
         dt_pre = dt - timedelta(minutes=10)
         stamp = _lon(dt).strftime("%Y%m%d-%H%M")
         rule_name = f"rps-pipeline-pre-{stamp}"
@@ -380,13 +406,15 @@ def main() -> None:
             task_def_arn=taskdef_pipeline,
             subnets_csv=subnets_csv,
             security_groups_csv=security_groups_csv,
+            race_url=url,
         )
         print(f"  scheduled pre-race  {_lon(dt_pre).strftime('%H:%M')} London"
               f"  (race at {_lon(dt).strftime('%H:%M')} London"
-              f" / cron UTC {_cron_expr(dt_pre)})")
+              f" / cron UTC {_cron_expr(dt_pre)}"
+              f" / url {url})")
 
     # Schedule pipeline 30 mins after the last race
-    last_dt = times[-1]
+    last_dt, last_url = times[-1]
     dt_post = last_dt + timedelta(minutes=30)
     stamp = _lon(last_dt).strftime("%Y%m%d-%H%M")
     rule_name = f"rps-pipeline-post-{stamp}"
@@ -403,6 +431,7 @@ def main() -> None:
             task_def_arn=taskdef_pipeline,
             subnets_csv=subnets_csv,
             security_groups_csv=security_groups_csv,
+            # No race URL for post-race (no specific race)
         )
         print(f"  scheduled post-race {_lon(dt_post).strftime('%H:%M')} London"
               f"  (30 min after last race at {_lon(last_dt).strftime('%H:%M')} London"
