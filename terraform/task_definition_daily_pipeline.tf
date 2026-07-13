@@ -30,6 +30,14 @@ resource "aws_ecs_task_definition" "daily_pipeline" {
           name  = "SCRAPER_DATA_BUCKET_NAME"
           value = aws_s3_bucket.scraper_data.bucket
         },
+        {
+          name  = "SNS_TOPIC_ARN"
+          value = aws_sns_topic.pipeline_notifications.arn
+        },
+        {
+          name  = "PROBABILITIES_API_URL"
+          value = aws_apigatewayv2_stage.probabilities.invoke_url
+        },
       ]
 
       logConfiguration = {

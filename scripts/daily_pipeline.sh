@@ -209,5 +209,24 @@ fi
 kill ${CHROMIUM_PID} >/dev/null 2>&1 || true
 kill ${XVFB_PID} >/dev/null 2>&1 || true
 
+# ============================================================
+# STEP 11: Send SNS notification with probabilities URL
+# ============================================================
+if [ -n "${SNS_TOPIC_ARN:-}" ] && [ -n "${PROBABILITIES_API_URL:-}" ]; then
+  echo "=== step 11: sending SNS notification ==="
+  if [ -n "${RACE_TIME:-}" ]; then
+    PROB_URL="${PROBABILITIES_API_URL%/}/${RESULTS_DATE_USED}?run=${RACE_TIME}"
+    SNS_MESSAGE="Race ${RACE_TIME} pipeline complete. Probabilities: ${PROB_URL}"
+  else
+    PROB_URL="${PROBABILITIES_API_URL%/}/${RESULTS_DATE_USED}"
+    SNS_MESSAGE="Daily pipeline complete for ${RESULTS_DATE_USED}. Probabilities: ${PROB_URL}"
+  fi
+  aws sns publish \
+    --topic-arn "${SNS_TOPIC_ARN}" \
+    --subject "Racing Post Pipeline Complete" \
+    --message "${SNS_MESSAGE}" \
+    --region "${AWS_REGION:-eu-west-2}" || true
+fi
+
 echo "=== daily pipeline complete ==="
 exit 0
