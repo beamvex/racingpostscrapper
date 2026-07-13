@@ -162,6 +162,27 @@ resource "aws_lambda_function" "starter" {
   }
 }
 
+# Grant EventBridge Scheduler role permission to invoke the starter Lambda
+data "aws_iam_policy_document" "scheduler_invoke_lambda" {
+  statement {
+    effect = "Allow"
+
+    actions = [
+      "lambda:InvokeFunction"
+    ]
+
+    resources = [
+      aws_lambda_function.starter.arn
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "scheduler_invoke_lambda" {
+  name   = "racingpost-scheduler-invoke-lambda"
+  role   = aws_iam_role.lambda.id
+  policy = data.aws_iam_policy_document.scheduler_invoke_lambda.json
+}
+
 # Grant Lambda permission to run ECS tasks
 data "aws_iam_policy_document" "starter_lambda_ecs" {
   statement {
