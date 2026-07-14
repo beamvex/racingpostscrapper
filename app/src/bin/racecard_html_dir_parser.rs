@@ -1082,7 +1082,7 @@ fn extract_race_meta(v: &Value) -> RaceMeta {
 fn extract_runners(v: &Value) -> Vec<RunnerRec> {
     let mut best: Vec<RunnerRec> = Vec::new();
 
-    walk_arrays(v, &mut |arr| {
+    walk_arrays_skip(v, &["nonRunners", "nonRunner", "withdrawn"], &mut |arr| {
         if arr.is_empty() {
             return false;
         }
@@ -1090,6 +1090,14 @@ fn extract_runners(v: &Value) -> Vec<RunnerRec> {
         let mut candidates = Vec::<RunnerRec>::new();
         for el in arr {
             let Some(obj) = el.as_object() else { continue };
+
+            // Skip entries explicitly flagged as non-runners.
+            let is_nr = ["isNonRunner", "nonRunner", "isWithdrawn", "withdrawn"]
+                .iter()
+                .any(|k| obj.get(*k).and_then(|v| v.as_bool()).unwrap_or(false));
+            if is_nr {
+                continue;
+            }
 
             let horse = first_string(obj, &["horseName", "horse", "name"]);
             let jockey = first_string(obj, &["jockeyName", "jockey"]);
@@ -1311,19 +1319,22 @@ fn walk(v: &Value, f: &mut impl FnMut(&serde_json::Map<String, Value>) -> bool) 
     }
 }
 
-fn walk_arrays(v: &Value, f: &mut impl FnMut(&[Value]) -> bool) {
+fn walk_arrays_skip(v: &Value, skip_keys: &[&str], f: &mut impl FnMut(&[Value]) -> bool) {
     match v {
         Value::Array(a) => {
             if f(a) {
                 return;
             }
             for vv in a {
-                walk_arrays(vv, f);
+                walk_arrays_skip(vv, skip_keys, f);
             }
         }
         Value::Object(o) => {
-            for (_k, vv) in o {
-                walk_arrays(vv, f);
+            for (k, vv) in o {
+                if skip_keys.contains(&k.as_str()) {
+                    continue;
+                }
+                walk_arrays_skip(vv, skip_keys, f);
             }
         }
         _ => {}
