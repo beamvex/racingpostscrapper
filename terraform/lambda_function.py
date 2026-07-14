@@ -154,8 +154,19 @@ def _build_html(date_str: str, rows: list[dict],
     out.append('<html lang="en"><head>')
     out.append('<meta charset="utf-8">')
     out.append('<meta name="viewport" content="width=device-width, initial-scale=1">')
+    out.append('<link rel="preconnect" href="https://cdn.jsdelivr.net">')
     out.append('<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" '
                'rel="stylesheet" crossorigin="anonymous">')
+    out.append('<style>'
+               'body{font-family:system-ui,sans-serif;margin:1rem}'
+               'table{width:100%;border-collapse:collapse;font-size:.85rem}'
+               'th,td{padding:.35rem .5rem;border-bottom:1px solid #dee2e6;text-align:left}'
+               'th{background:#f8f9fa;font-weight:600}'
+               '.text-end{text-align:right}'
+               '.text-success{color:#198754}'
+               '.text-danger{color:#dc3545}'
+               '.fw-semibold{font-weight:600}'
+               '</style>')
     out.append(f'<title>{_esc(date_str)} Probabilities</title>')
     out.append('</head><body><div class="container-fluid my-4">')
     out.append('<div class="row">')
@@ -195,12 +206,12 @@ def _build_html(date_str: str, rows: list[dict],
         out.append('<table class="table table-sm table-striped table-hover align-middle mb-0">')
         out.append('<thead><tr>'
                    '<th>Horse</th>'
-                   '<th>Jockey</th>'
-                   '<th>Trainer</th>'
-                   '<th class="text-end">Bookie odds</th>'
-                   '<th class="text-end">Bookie prob</th>'
-                   '<th class="text-end">Model prob</th>'
-                   '<th class="text-end">Fair odds</th>'
+                   '<th class="d-none d-md-table-cell">Jockey</th>'
+                   '<th class="d-none d-md-table-cell">Trainer</th>'
+                   '<th class="text-end">Odds</th>'
+                   '<th class="text-end d-none d-md-table-cell">Bookie %</th>'
+                   '<th class="text-end">Model %</th>'
+                   '<th class="text-end d-none d-md-table-cell">Fair odds</th>'
                    '<th class="text-end">Edge</th>'
                    '</tr></thead><tbody>')
         for r in runners:
@@ -210,12 +221,12 @@ def _build_html(date_str: str, rows: list[dict],
             out.append(
                 f'<tr>'
                 f'<td>{_esc(r.get("horse",""))}</td>'
-                f'<td>{_esc(r.get("jockey",""))}</td>'
-                f'<td>{_esc(r.get("trainer",""))}</td>'
+                f'<td class="d-none d-md-table-cell">{_esc(r.get("jockey",""))}</td>'
+                f'<td class="d-none d-md-table-cell">{_esc(r.get("trainer",""))}</td>'
                 f'<td class="text-end">{_fmt_odds(r.get("bookie_odds"))}</td>'
-                f'<td class="text-end">{_fmt_prob(bp)}</td>'
+                f'<td class="text-end d-none d-md-table-cell">{_fmt_prob(bp)}</td>'
                 f'<td class="text-end">{_fmt_prob(mp)}</td>'
-                f'<td class="text-end">{_fmt_odds(r.get("fair_odds"))}</td>'
+                f'<td class="text-end d-none d-md-table-cell">{_fmt_odds(r.get("fair_odds"))}</td>'
                 + _edge_cell(edge) +
                 f'</tr>'
             )
@@ -229,11 +240,13 @@ def _build_html(date_str: str, rows: list[dict],
                                f'{sign}{pct:.1f}pp</td>')
         out.append(
             f'</tbody><tfoot><tr>'
-            f'<td colspan="3" class="fw-bold border-top">Totals</td>'
+            f'<td class="fw-bold border-top">Totals</td>'
+            f'<td class="d-none d-md-table-cell border-top"></td>'
+            f'<td class="d-none d-md-table-cell border-top"></td>'
             f'<td class="text-end border-top">—</td>'
-            f'<td class="text-end fw-bold border-top">{_fmt_prob(total_bookie)}</td>'
+            f'<td class="text-end fw-bold border-top d-none d-md-table-cell">{_fmt_prob(total_bookie)}</td>'
             f'<td class="text-end fw-bold border-top">{_fmt_prob(total_model)}</td>'
-            f'<td class="text-end border-top">—</td>'
+            f'<td class="text-end border-top d-none d-md-table-cell">—</td>'
             + edge_total_cell +
             f'</tr></tfoot></table></div>'
         )
