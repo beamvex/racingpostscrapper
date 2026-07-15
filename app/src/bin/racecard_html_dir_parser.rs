@@ -327,8 +327,11 @@ fn parse_one_racecard_html(html: &str) -> anyhow::Result<(RaceMeta, Vec<RunnerRe
     // Prefer structured Next.js data if available, but fall back to HTML parsing.
     if let Some(next_data) = extract_next_data_json(html) {
         if let Ok(v) = serde_json::from_str::<Value>(&next_data) {
-            let meta = extract_race_meta(&v);
-            let mut runners = extract_runners(&v);
+            // First try the canonical path: initialState.racePage.data — this is
+            // the definitive source on single racecard pages and avoids picking up
+            // non-runners or horses from other races embedded in the page JSON.
+            let (meta, mut runners) = extract_from_race_page(&v)
+                .unwrap_or_else(|| (extract_race_meta(&v), extract_runners(&v)));
             if !runners.is_empty() {
                 // Next.js runner objects sometimes omit weight, but it is present in the rendered HTML.
                 // Backfill missing weights by matching on horse name.
@@ -1036,6 +1039,66 @@ struct RunnerRec {
     weight_st: Option<String>,
     weight_lb: Option<String>,
     odds: Option<String>,
+}
+
+/// Navigate props.pageProps.initialState.racePage.data — the canonical location
+/// for race + runner data on a single Racing Post racecard page.
+/// Returns None if the path doesn't exist or has no runners (e.g. time-order pages).
+fn extract_from_race_page(v: &Value) -> Option<(RaceMeta, Vec<RunnerRec>)> {
+    let rp_data = v
+        .get("props")?.get("pageProps")?.get("initialState")?
+        .get("racePage")?.get("data")?;
+
+    let race = rp_data.get("race")?;
+    let runners_val = rp_data.get("runners")?.as_array()?;
+    if runners_val.is_empty() {
+        return None;
+    }
+
+    let meta = RaceMeta {
+        course: race.get("courseName").or_else(|| race.get("meetingName"))
+            .and_then(|v| v.as_str()).map(|s| s.to_string()),
+        time: race.get("raceTime").or_else(|| race.get("localMeetingRaceDateTime"))
+            .and_then(|v| v.as_str()).map(|s| s.to_string()),
+        race_name: race.get("raceTitle").or_else(|| race.get("raceName"))
+            .and_then(|v| v.as_str()).map(|s| s.to_string()),
+        going: race.get("going").and_then(|v| v.as_str()).map(|s| s.to_string()),
+    };
+
+    let mut runners = Vec::new();
+    for el in runners_val {
+        let Some(obj) = el.as_object() else { continue };
+
+        // Skip non-runners.
+        let is_nr = obj.get("nonRunner").or_else(|| obj.get("isNonRunner"))
+            .and_then(|v| v.as_bool()).unwrap_or(false);
+        if is_nr {
+            continue;
+        }
+
+        let horse = first_string(obj, &["horseName", "horse", "name"]);
+        let Some(_) = horse.as_deref().filter(|s| !s.is_empty()) else { continue };
+
+        let jockey = first_string(obj, &["jockeyName", "jockey"]);
+        let trainer = first_string(obj, &["trainerName", "trainer"]);
+        let age = first_string_or_number(obj, &["age"]);
+        let weight_st = obj.get("formattedWeightStones").and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty()).map(|s| s.to_string());
+        let weight_lb = obj.get("formattedWeightPounds").and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty()).map(|s| s.to_string());
+        let weight = first_string_or_number(obj, &["weightCarried"]);
+        let odds = first_string_or_number(obj, &[
+            "forecastOddsValue", "odds", "currentOdds", "price", "forecastPrice",
+        ]);
+
+        runners.push(RunnerRec { horse, jockey, trainer, age, weight, weight_st, weight_lb, odds });
+    }
+
+    if runners.is_empty() {
+        return None;
+    }
+
+    Some((meta, runners))
 }
 
 fn extract_race_meta(v: &Value) -> RaceMeta {
