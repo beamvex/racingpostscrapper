@@ -1081,6 +1081,7 @@ fn extract_race_meta(v: &Value) -> RaceMeta {
 
 fn extract_runners(v: &Value) -> Vec<RunnerRec> {
     let mut best: Vec<RunnerRec> = Vec::new();
+    let mut best_odds_count: usize = 0;
 
     walk_arrays_skip(v, &["nonRunners", "nonRunner", "withdrawn"], &mut |arr| {
         if arr.is_empty() {
@@ -1088,6 +1089,7 @@ fn extract_runners(v: &Value) -> Vec<RunnerRec> {
         }
         // candidate: array of objects that look like runner entries
         let mut candidates = Vec::<RunnerRec>::new();
+        let mut odds_count: usize = 0;
         for el in arr {
             let Some(obj) = el.as_object() else { continue };
 
@@ -1108,6 +1110,9 @@ fn extract_runners(v: &Value) -> Vec<RunnerRec> {
 
             let looks_like_runner = horse.is_some() && (jockey.is_some() || trainer.is_some());
             if looks_like_runner {
+                if odds.is_some() {
+                    odds_count += 1;
+                }
                 candidates.push(RunnerRec {
                     horse,
                     jockey,
@@ -1121,8 +1126,16 @@ fn extract_runners(v: &Value) -> Vec<RunnerRec> {
             }
         }
 
-        if candidates.len() > best.len() {
+        // Prefer arrays where runners have odds (active runners) over those without
+        // (non-runners / other-race horses embedded on the page).
+        // Tiebreak on size.
+        let beats_best = !candidates.is_empty() && (
+            odds_count > best_odds_count
+            || (odds_count == best_odds_count && candidates.len() > best.len())
+        );
+        if beats_best {
             best = candidates;
+            best_odds_count = odds_count;
         }
 
         false
