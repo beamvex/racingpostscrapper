@@ -1,5 +1,9 @@
 resource "aws_s3_bucket" "scraper_data" {
   bucket_prefix = "racingpost-scraper-data-"
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_s3_bucket_public_access_block" "scraper_data" {
