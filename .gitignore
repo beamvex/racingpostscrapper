@@ -3,3 +3,4 @@ target
 data
 *.log
 __pycache__
+.terraform/
